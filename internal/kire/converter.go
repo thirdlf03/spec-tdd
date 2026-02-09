@@ -119,10 +119,13 @@ func ConvertToSpec(seg *Segment, specDir string) (*spec.Spec, error) {
 		return nil, fmt.Errorf("segment is nil")
 	}
 
-	// Determine title from heading_path last element
+	// Determine title from heading_path last element, fallback to first heading in content
 	title := ""
 	if len(seg.Meta.HeadingPath) > 0 {
 		title = seg.Meta.HeadingPath[len(seg.Meta.HeadingPath)-1]
+	}
+	if title == "" {
+		title = extractFirstHeading(seg.Content)
 	}
 
 	// Determine REQ ID
@@ -160,4 +163,15 @@ func ConvertToSpec(seg *Segment, specDir string) (*spec.Spec, error) {
 	}
 
 	return s, nil
+}
+
+// extractFirstHeading returns the text of the first Markdown heading in content.
+func extractFirstHeading(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			return strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+		}
+	}
+	return ""
 }

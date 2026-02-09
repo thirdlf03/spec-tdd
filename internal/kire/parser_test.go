@@ -8,13 +8,13 @@ import (
 )
 
 func TestParseJSONL(t *testing.T) {
-	t.Run("parse valid JSONL and sort by segment_id", func(t *testing.T) {
+	t.Run("parse valid JSONL and sort by segment_index", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		jsonlPath := filepath.Join(tmpDir, "metadata.jsonl")
 
-		content := `{"segment_id":"seg-003","heading_path":["Doc","Auth","Login"],"file_path":"seg-003.md"}
-{"segment_id":"seg-001","heading_path":["Doc","Intro"],"file_path":"seg-001.md"}
-{"segment_id":"seg-002","heading_path":["Doc","Auth"],"file_path":"seg-002.md"}`
+		content := `{"content":"# Login","metadata":{"source":"doc.md","segment_index":3,"filename":"03-login.md","heading_path":["Doc","Auth","Login"],"token_count":100,"block_count":5}}
+{"content":"# Intro","metadata":{"source":"doc.md","segment_index":1,"filename":"01-intro.md","heading_path":["Doc","Intro"],"token_count":50,"block_count":2}}
+{"content":"# Auth","metadata":{"source":"doc.md","segment_index":2,"filename":"02-auth.md","heading_path":["Doc","Auth"],"token_count":80,"block_count":4}}`
 
 		if err := os.WriteFile(jsonlPath, []byte(content), 0644); err != nil {
 			t.Fatalf("WriteFile error: %v", err)
@@ -29,20 +29,20 @@ func TestParseJSONL(t *testing.T) {
 			t.Fatalf("expected 3 entries, got %d", len(metas))
 		}
 
-		// Must be sorted by segment_id ascending
-		if metas[0].SegmentID != "seg-001" {
-			t.Errorf("metas[0].SegmentID = %q, want %q", metas[0].SegmentID, "seg-001")
+		// Must be sorted by segment_index ascending
+		if metas[0].SegmentID != "seg-0001" {
+			t.Errorf("metas[0].SegmentID = %q, want %q", metas[0].SegmentID, "seg-0001")
 		}
-		if metas[1].SegmentID != "seg-002" {
-			t.Errorf("metas[1].SegmentID = %q, want %q", metas[1].SegmentID, "seg-002")
+		if metas[1].SegmentID != "seg-0002" {
+			t.Errorf("metas[1].SegmentID = %q, want %q", metas[1].SegmentID, "seg-0002")
 		}
-		if metas[2].SegmentID != "seg-003" {
-			t.Errorf("metas[2].SegmentID = %q, want %q", metas[2].SegmentID, "seg-003")
+		if metas[2].SegmentID != "seg-0003" {
+			t.Errorf("metas[2].SegmentID = %q, want %q", metas[2].SegmentID, "seg-0003")
 		}
 
 		// Verify fields are parsed correctly
-		if metas[2].FilePath != "seg-003.md" {
-			t.Errorf("metas[2].FilePath = %q, want %q", metas[2].FilePath, "seg-003.md")
+		if metas[2].FilePath != "03-login.md" {
+			t.Errorf("metas[2].FilePath = %q, want %q", metas[2].FilePath, "03-login.md")
 		}
 		if len(metas[2].HeadingPath) != 3 || metas[2].HeadingPath[2] != "Login" {
 			t.Errorf("metas[2].HeadingPath = %v, want [Doc Auth Login]", metas[2].HeadingPath)
@@ -63,9 +63,9 @@ func TestParseJSONL(t *testing.T) {
 		tmpDir := t.TempDir()
 		jsonlPath := filepath.Join(tmpDir, "metadata.jsonl")
 
-		content := `{"segment_id":"seg-001","heading_path":["Doc"],"file_path":"seg-001.md"}
+		content := `{"content":"ok","metadata":{"source":"doc.md","segment_index":0,"filename":"01.md","heading_path":["Doc"],"token_count":10,"block_count":1}}
 {invalid json}
-{"segment_id":"seg-003","heading_path":["Doc"],"file_path":"seg-003.md"}`
+{"content":"ok","metadata":{"source":"doc.md","segment_index":2,"filename":"03.md","heading_path":["Doc"],"token_count":10,"block_count":1}}`
 
 		if err := os.WriteFile(jsonlPath, []byte(content), 0644); err != nil {
 			t.Fatalf("WriteFile error: %v", err)
@@ -101,9 +101,9 @@ func TestParseJSONL(t *testing.T) {
 		tmpDir := t.TempDir()
 		jsonlPath := filepath.Join(tmpDir, "metadata.jsonl")
 
-		content := `{"segment_id":"seg-001","heading_path":["Doc"],"file_path":"seg-001.md"}
+		content := `{"content":"a","metadata":{"source":"doc.md","segment_index":0,"filename":"01.md","heading_path":["Doc"],"token_count":10,"block_count":1}}
 
-{"segment_id":"seg-002","heading_path":["Doc"],"file_path":"seg-002.md"}
+{"content":"b","metadata":{"source":"doc.md","segment_index":1,"filename":"02.md","heading_path":["Doc"],"token_count":10,"block_count":1}}
 `
 
 		if err := os.WriteFile(jsonlPath, []byte(content), 0644); err != nil {
@@ -166,9 +166,9 @@ func TestReadSegment(t *testing.T) {
 		}
 	})
 
-	t.Run("extract kire context comment", func(t *testing.T) {
+	t.Run("extract context comment", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mdContent := "<!-- kire: 設計書 > 認証 > ログイン -->\n\n# Login\n\nContent here.\n"
+		mdContent := "<!-- context: 設計書 > 認証 > ログイン -->\n\n# Login\n\nContent here.\n"
 		if err := os.WriteFile(filepath.Join(tmpDir, "seg-001.md"), []byte(mdContent), 0644); err != nil {
 			t.Fatalf("WriteFile error: %v", err)
 		}

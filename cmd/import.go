@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/thirdlf03/spec-tdd/internal/kire"
@@ -100,6 +101,9 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 		if len(seg.Meta.HeadingPath) > 0 {
 			title = seg.Meta.HeadingPath[len(seg.Meta.HeadingPath)-1]
 		}
+		if title == "" {
+			title = extractFirstHeading(seg.Content)
+		}
 
 		id := kire.ExtractReqID(seg.Content)
 		if id == "" {
@@ -170,4 +174,15 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// extractFirstHeading returns the text of the first Markdown heading in content.
+func extractFirstHeading(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			return strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+		}
+	}
+	return ""
 }
