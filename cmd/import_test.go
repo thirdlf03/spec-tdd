@@ -107,8 +107,12 @@ func TestImportKireCommand(t *testing.T) {
 		importKireCmd.SetOut(&buf)
 
 		// Set dry-run flag
-		importKireCmd.Flags().Set("dry-run", "true")
-		defer importKireCmd.Flags().Set("dry-run", "false")
+		if err := importKireCmd.Flags().Set("dry-run", "true"); err != nil {
+			t.Fatalf("set dry-run flag: %v", err)
+		}
+		defer func() {
+			_ = importKireCmd.Flags().Set("dry-run", "false")
+		}()
 
 		if err := importKireCmd.RunE(importKireCmd, []string{}); err != nil {
 			t.Fatalf("importKireCmd error: %v", err)
@@ -171,8 +175,12 @@ func TestImportKireCommand(t *testing.T) {
 		var buf bytes.Buffer
 		importKireCmd.SetOut(&buf)
 
-		importKireCmd.Flags().Set("force", "true")
-		defer importKireCmd.Flags().Set("force", "false")
+		if err := importKireCmd.Flags().Set("force", "true"); err != nil {
+			t.Fatalf("set force flag: %v", err)
+		}
+		defer func() {
+			_ = importKireCmd.Flags().Set("force", "false")
+		}()
 
 		if err := importKireCmd.RunE(importKireCmd, []string{}); err != nil {
 			t.Fatalf("importKireCmd error: %v", err)
