@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/main/.schema/devbox.schema.json",
+  "packages": [
+    "go@1.25.5",
+    "golangci-lint@latest",
+    "goreleaser@latest",
+    "gnumake@latest",
+    "git@latest",
+    "nodejs@latest"
+  ],
+  "shell": {
+    "init_hook": [
+      "echo '✨ Go CLI development environment ready!'",
+      "echo 'Go version:' $(go version)",
+      "echo '📦 Run \"make help\" to see available commands'"
+    ],
+    "scripts": {
+      "build":   "make build",
+      "test":    "make test",
+      "lint":    "golangci-lint run",
+      "install": "make install",
+      "clean":   "make clean"
+    }
+  },
+  "env": {
+    "GOTOOLCHAIN": "local"
+  }
+}

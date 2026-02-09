@@ -1,0 +1,101 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: spec-tdd
+    binary: spec-tdd
+    main: .
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/thirdlf03/spec-tdd/cmd.Version={{.Version}}
+      - -X github.com/thirdlf03/spec-tdd/cmd.Commit={{.Commit}}
+      - -X github.com/thirdlf03/spec-tdd/cmd.BuildDate={{.Date}}
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: spec-tdd
+    format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+
+# homebrew_casks:
+#   - repository:
+#       owner: YOUR_USERNAME
+#       name: homebrew-tap
+#       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+#     hooks:
+#       post:
+#         install: |
+#           if OS.mac?
+#             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/app"]
+#           end
+#     caveats: |
+#       Shell completion:
+#
+#         # Bash
+#         source <(app completion bash)
+#
+#         # Zsh (add to .zshrc)
+#         source <(app completion zsh)
+#
+#         # Fish
+#         app completion fish | source
+#     homepage: "https://github.com/YOUR_USERNAME/YOUR_PROJECT"
+#     description: "Your project description"
+#     license: "MIT"
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Performance Improvements
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Documentation
+      regexp: '^.*?docs(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: Others
+      order: 999
+  filters:
+    exclude:
+      - '^test:'
+      - '^chore:'
+      - '^ci:'

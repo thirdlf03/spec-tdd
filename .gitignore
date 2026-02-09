@@ -1,0 +1,82 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.*
+*.coverprofile
+
+# Profiling and tracing
+*.prof
+trace.out
+
+# Debugger binaries (Delve)
+__debug_bin*
+
+# Build artifacts
+/app
+dist/
+
+# Go workspace (multi-module development)
+go.work
+go.work.sum
+
+# Config files (keep examples)
+config.yaml
+*.local
+
+# OS specific files
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# IDE and editor files
+.vscode/
+.idea/
+.zed/
+*.swp
+*.swo
+*~
+tags
+
+# Temporary files
+*.tmp
+tmp/
+
+# GoReleaser
+.goreleaser.yaml.backup
+
+# Devbox / Nix
+.devbox/
+result
+result-*
+
+# Generated documentation and completions
+docs/
+completions/
+manpages/
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+
+# Other tools
+.direnv/
+
+# Jujutsu VCS (co-located mode)
+.jj/
+
+.kiro/
+
+plans/
+
+memo.md
