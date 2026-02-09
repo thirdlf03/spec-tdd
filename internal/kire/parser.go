@@ -14,16 +14,31 @@ import (
 	"github.com/thirdlf03/spec-tdd/internal/apperrors"
 )
 
-var contextCommentPattern = regexp.MustCompile(`<!--\s*kire:\s*(.+?)\s*-->`)
+var contextCommentPattern = regexp.MustCompile(`<!--\s*context:\s*(.+?)\s*-->`)
 
-// SegmentMeta represents a single line from kire JSONL metadata.
+// SegmentMeta represents parsed segment metadata used internally.
 type SegmentMeta struct {
 	SegmentID   string   `json:"segment_id"`
 	HeadingPath []string `json:"heading_path"`
 	FilePath    string   `json:"file_path"`
 }
 
-// ParseJSONL parses a JSONL metadata file and returns entries sorted by segment_id ascending.
+// kireRawEntry matches kire's actual JSONL output format.
+type kireRawEntry struct {
+	Content  string          `json:"content"`
+	Metadata kireRawMetadata `json:"metadata"`
+}
+
+type kireRawMetadata struct {
+	Source       string   `json:"source"`
+	SegmentIndex int      `json:"segment_index"`
+	Filename     string   `json:"filename"`
+	HeadingPath  []string `json:"heading_path"`
+	TokenCount   int      `json:"token_count"`
+	BlockCount   int      `json:"block_count"`
+}
+
+// ParseJSONL parses a kire JSONL metadata file and returns entries sorted by segment_index ascending.
 func ParseJSONL(path string) ([]SegmentMeta, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -31,7 +46,12 @@ func ParseJSONL(path string) ([]SegmentMeta, error) {
 	}
 	defer f.Close()
 
-	var metas []SegmentMeta
+	type indexedMeta struct {
+		index int
+		meta  SegmentMeta
+	}
+
+	var entries []indexedMeta
 	scanner := bufio.NewScanner(f)
 	lineNum := 0
 
@@ -42,20 +62,33 @@ func ParseJSONL(path string) ([]SegmentMeta, error) {
 			continue
 		}
 
-		var meta SegmentMeta
-		if err := json.Unmarshal([]byte(line), &meta); err != nil {
+		var raw kireRawEntry
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
 			return nil, apperrors.Wrap("kire.ParseJSONL", fmt.Errorf("line %d: %w", lineNum, err))
 		}
-		metas = append(metas, meta)
+
+		entries = append(entries, indexedMeta{
+			index: raw.Metadata.SegmentIndex,
+			meta: SegmentMeta{
+				SegmentID:   fmt.Sprintf("seg-%04d", raw.Metadata.SegmentIndex),
+				HeadingPath: raw.Metadata.HeadingPath,
+				FilePath:    raw.Metadata.Filename,
+			},
+		})
 	}
 
 	if err := scanner.Err(); err != nil {
 		return nil, apperrors.Wrap("kire.ParseJSONL", err)
 	}
 
-	sort.Slice(metas, func(i, j int) bool {
-		return metas[i].SegmentID < metas[j].SegmentID
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].index < entries[j].index
 	})
+
+	metas := make([]SegmentMeta, len(entries))
+	for i, e := range entries {
+		metas[i] = e.meta
+	}
 
 	return metas, nil
 }

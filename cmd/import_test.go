@@ -37,18 +37,18 @@ func setupImportTestDir(t *testing.T) string {
 		t.Fatalf("mkdir error: %v", err)
 	}
 
-	jsonl := `{"segment_id":"seg-001","heading_path":["Doc","Login"],"file_path":"seg-001.md"}
-{"segment_id":"seg-002","heading_path":["Doc","Auth","Logout"],"file_path":"seg-002.md"}`
+	jsonl := `{"content":"# Login\n\nREQ-001\n","metadata":{"source":"doc.md","segment_index":0,"filename":"01-login.md","heading_path":["Doc","Login"],"token_count":50,"block_count":3}}
+{"content":"# Logout\n","metadata":{"source":"doc.md","segment_index":1,"filename":"02-logout.md","heading_path":["Doc","Auth","Logout"],"token_count":30,"block_count":2}}`
 	if err := os.WriteFile(filepath.Join(kireDir, "metadata.jsonl"), []byte(jsonl), 0644); err != nil {
 		t.Fatalf("write jsonl error: %v", err)
 	}
 
 	seg1 := "# Login\n\nREQ-001\n\n- Given: ユーザーが存在する\n- When: ログインする\n- Then: トークン返却\n\nセッション期限は？\n"
 	seg2 := "# Logout\n\nログアウト機能。\n"
-	if err := os.WriteFile(filepath.Join(kireDir, "seg-001.md"), []byte(seg1), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(kireDir, "01-login.md"), []byte(seg1), 0644); err != nil {
 		t.Fatalf("write seg1 error: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(kireDir, "seg-002.md"), []byte(seg2), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(kireDir, "02-logout.md"), []byte(seg2), 0644); err != nil {
 		t.Fatalf("write seg2 error: %v", err)
 	}
 
@@ -86,8 +86,8 @@ func TestImportKireCommand(t *testing.T) {
 		if len(s1.Questions) != 1 {
 			t.Errorf("REQ-001 questions = %d, want 1", len(s1.Questions))
 		}
-		if s1.Source.SegmentID != "seg-001" {
-			t.Errorf("REQ-001 Source.SegmentID = %q, want %q", s1.Source.SegmentID, "seg-001")
+		if s1.Source.SegmentID != "seg-0000" {
+			t.Errorf("REQ-001 Source.SegmentID = %q, want %q", s1.Source.SegmentID, "seg-0000")
 		}
 
 		// REQ-002 was auto-assigned
