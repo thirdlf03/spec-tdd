@@ -12,7 +12,7 @@ import (
 )
 
 func hasSource(s *spec.Spec) bool {
-	return s.Source.SegmentID != "" || len(s.Source.HeadingPath) > 0
+	return s.Source.SegmentID != "" || len(s.Source.HeadingPath) > 0 || s.Source.FilePath != ""
 }
 
 var mapCmd = &cobra.Command{
@@ -64,8 +64,12 @@ func renderMapMarkdown(specs []*spec.Spec) string {
 		}
 
 		if hasSource(s) {
-			sb.WriteString(fmt.Sprintf("Source: segment_id=%s, heading_path=%s\n\n",
-				s.Source.SegmentID, strings.Join(s.Source.HeadingPath, " > ")))
+			src := fmt.Sprintf("Source: segment_id=%s, heading_path=%s",
+				s.Source.SegmentID, strings.Join(s.Source.HeadingPath, " > "))
+			if s.Source.FilePath != "" {
+				src += fmt.Sprintf(", file_path=%s", s.Source.FilePath)
+			}
+			sb.WriteString(src + "\n\n")
 		}
 
 		if len(s.Examples) > 0 {

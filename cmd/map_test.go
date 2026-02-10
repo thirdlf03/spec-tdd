@@ -33,6 +33,26 @@ func TestRenderMapMarkdown_WithSource(t *testing.T) {
 		}
 	})
 
+	t.Run("source info includes file_path when present", func(t *testing.T) {
+		specs := []*spec.Spec{
+			{
+				ID:    "REQ-001",
+				Title: "Login",
+				Source: spec.SourceInfo{
+					SegmentID:   "seg-001",
+					HeadingPath: []string{"設計書", "認証"},
+					FilePath:    "seg-0001.md",
+				},
+			},
+		}
+
+		output := renderMapMarkdown(specs)
+
+		if !strings.Contains(output, "file_path=seg-0001.md") {
+			t.Errorf("expected file_path in output, got:\n%s", output)
+		}
+	})
+
 	t.Run("source info is omitted when zero value", func(t *testing.T) {
 		specs := []*spec.Spec{
 			{

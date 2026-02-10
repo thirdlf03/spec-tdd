@@ -142,6 +142,167 @@ func TestSourceInfo_BackwardCompatibility(t *testing.T) {
 	})
 }
 
+func TestValidate_Depends(t *testing.T) {
+	tests := []struct {
+		name    string
+		spec    Spec
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid depends",
+			spec: Spec{ID: "REQ-001", Title: "A", Depends: []string{"REQ-002", "REQ-003"}},
+		},
+		{
+			name: "empty depends is valid",
+			spec: Spec{ID: "REQ-001", Title: "A"},
+		},
+		{
+			name:    "invalid format",
+			spec:    Spec{ID: "REQ-001", Title: "A", Depends: []string{"INVALID"}},
+			wantErr: true,
+			errMsg:  "must match REQ-###",
+		},
+		{
+			name:    "self-reference",
+			spec:    Spec{ID: "REQ-001", Title: "A", Depends: []string{"REQ-001"}},
+			wantErr: true,
+			errMsg:  "self-reference",
+		},
+		{
+			name:    "duplicate",
+			spec:    Spec{ID: "REQ-001", Title: "A", Depends: []string{"REQ-002", "REQ-002"}},
+			wantErr: true,
+			errMsg:  "duplicate",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.spec.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !searchString(err.Error(), tt.errMsg) {
+					t.Fatalf("expected error containing %q, got %q", tt.errMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateDependsGraph(t *testing.T) {
+	t.Run("valid DAG", func(t *testing.T) {
+		specs := []*Spec{
+			{ID: "REQ-001", Title: "A"},
+			{ID: "REQ-002", Title: "B", Depends: []string{"REQ-001"}},
+			{ID: "REQ-003", Title: "C", Depends: []string{"REQ-001", "REQ-002"}},
+		}
+		if err := ValidateDependsGraph(specs); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("missing reference", func(t *testing.T) {
+		specs := []*Spec{
+			{ID: "REQ-001", Title: "A", Depends: []string{"REQ-999"}},
+		}
+		err := ValidateDependsGraph(specs)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !searchString(err.Error(), "does not exist") {
+			t.Fatalf("expected 'does not exist' error, got %q", err.Error())
+		}
+	})
+
+	t.Run("cycle detected", func(t *testing.T) {
+		specs := []*Spec{
+			{ID: "REQ-001", Title: "A", Depends: []string{"REQ-002"}},
+			{ID: "REQ-002", Title: "B", Depends: []string{"REQ-001"}},
+		}
+		err := ValidateDependsGraph(specs)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !searchString(err.Error(), "cycle") {
+			t.Fatalf("expected 'cycle' error, got %q", err.Error())
+		}
+	})
+
+	t.Run("no depends at all", func(t *testing.T) {
+		specs := []*Spec{
+			{ID: "REQ-001", Title: "A"},
+			{ID: "REQ-002", Title: "B"},
+		}
+		if err := ValidateDependsGraph(specs); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestDepends_BackwardCompatibility(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "REQ-001.yml")
+
+	// Save spec without depends
+	orig := &Spec{ID: "REQ-001", Title: "No depends"}
+	if err := Save(path, orig); err != nil {
+		t.Fatalf("Save error: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile error: %v", err)
+	}
+
+	// YAML should not contain "depends:" when empty
+	if searchString(string(data), "depends:") {
+		t.Fatalf("YAML should not contain 'depends:' when empty, got:\n%s", string(data))
+	}
+
+	// Load and verify
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if len(loaded.Depends) != 0 {
+		t.Fatalf("expected empty Depends, got %v", loaded.Depends)
+	}
+}
+
+func TestSourceInfo_FilePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "REQ-001.yml")
+
+	orig := &Spec{
+		ID:    "REQ-001",
+		Title: "With filepath",
+		Source: SourceInfo{
+			SegmentID:   "seg-001",
+			HeadingPath: []string{"設計書", "認証"},
+			FilePath:    "seg-0001.md",
+		},
+	}
+	if err := Save(path, orig); err != nil {
+		t.Fatalf("Save error: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+
+	if loaded.Source.FilePath != "seg-0001.md" {
+		t.Fatalf("FilePath = %q, want %q", loaded.Source.FilePath, "seg-0001.md")
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

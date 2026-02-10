@@ -270,6 +270,7 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 				Source: spec.SourceInfo{
 					SegmentID:   seg.Meta.SegmentID,
 					HeadingPath: headingPath,
+					FilePath:    seg.Meta.FilePath,
 				},
 			}
 
@@ -428,6 +429,7 @@ func runBatchEnrich(cmd *cobra.Command, log interface{ Warn(string, ...any) }, b
 			Source: spec.SourceInfo{
 				SegmentID:   sid,
 				HeadingPath: headingPath,
+				FilePath:    seg.Meta.FilePath,
 			},
 		}
 		entries = append(entries, importEntry{seg: seg, spec: s})
@@ -555,6 +557,7 @@ func buildEntryFromRegex(seg *kire.Segment, autoNext *int) importEntry {
 		Source: spec.SourceInfo{
 			SegmentID:   seg.Meta.SegmentID,
 			HeadingPath: headingPath,
+			FilePath:    seg.Meta.FilePath,
 		},
 	}
 

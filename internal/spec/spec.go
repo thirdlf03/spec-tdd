@@ -23,6 +23,7 @@ var (
 type SourceInfo struct {
 	SegmentID   string   `yaml:"segment_id,omitempty"`
 	HeadingPath []string `yaml:"heading_path,omitempty"`
+	FilePath    string   `yaml:"file_path,omitempty"`
 }
 
 // Spec represents a requirement spec file.
@@ -31,6 +32,7 @@ type Spec struct {
 	Title       string     `yaml:"title"`
 	Description string     `yaml:"description,omitempty"`
 	Source      SourceInfo `yaml:"source,omitempty"`
+	Depends     []string   `yaml:"depends,omitempty"`
 	Examples    []Example  `yaml:"examples,omitempty"`
 	Questions   []string   `yaml:"questions,omitempty"`
 	Tags        []string   `yaml:"tags,omitempty"`
@@ -60,6 +62,86 @@ func (s *Spec) Validate() error {
 			return apperrors.New("spec.Validate", apperrors.ErrInvalidInput, fmt.Sprintf("example %d must include given/when/then", i+1))
 		}
 	}
+
+	// Validate Depends
+	seen := make(map[string]bool, len(s.Depends))
+	for _, dep := range s.Depends {
+		if !reqIDPattern.MatchString(dep) {
+			return apperrors.New("spec.Validate", apperrors.ErrInvalidInput,
+				fmt.Sprintf("depends entry %q must match REQ-### format", dep))
+		}
+		if dep == s.ID {
+			return apperrors.New("spec.Validate", apperrors.ErrInvalidInput,
+				fmt.Sprintf("depends entry %q is a self-reference", dep))
+		}
+		if seen[dep] {
+			return apperrors.New("spec.Validate", apperrors.ErrInvalidInput,
+				fmt.Sprintf("duplicate depends entry %q", dep))
+		}
+		seen[dep] = true
+	}
+
+	return nil
+}
+
+// ValidateDependsGraph checks the dependency graph across all specs for
+// missing references and cycles. Uses DFS 3-color (white/gray/black).
+func ValidateDependsGraph(specs []*Spec) error {
+	ids := make(map[string]bool, len(specs))
+	for _, s := range specs {
+		ids[s.ID] = true
+	}
+
+	// Check that all referenced dependencies exist
+	for _, s := range specs {
+		for _, dep := range s.Depends {
+			if !ids[dep] {
+				return apperrors.New("spec.ValidateDependsGraph", apperrors.ErrInvalidInput,
+					fmt.Sprintf("%s depends on %s which does not exist", s.ID, dep))
+			}
+		}
+	}
+
+	// Build adjacency list
+	adj := make(map[string][]string, len(specs))
+	for _, s := range specs {
+		adj[s.ID] = s.Depends
+	}
+
+	// DFS cycle detection: 0=white, 1=gray, 2=black
+	color := make(map[string]int, len(specs))
+	var cyclePath []string
+
+	var dfs func(id string) bool
+	dfs = func(id string) bool {
+		color[id] = 1 // gray
+		cyclePath = append(cyclePath, id)
+		for _, dep := range adj[id] {
+			switch color[dep] {
+			case 1: // gray = cycle
+				cyclePath = append(cyclePath, dep)
+				return true
+			case 0: // white = unvisited
+				if dfs(dep) {
+					return true
+				}
+			}
+		}
+		cyclePath = cyclePath[:len(cyclePath)-1]
+		color[id] = 2 // black
+		return false
+	}
+
+	for _, s := range specs {
+		if color[s.ID] == 0 {
+			cyclePath = nil
+			if dfs(s.ID) {
+				return apperrors.New("spec.ValidateDependsGraph", apperrors.ErrInvalidInput,
+					fmt.Sprintf("dependency cycle detected: %s", strings.Join(cyclePath, " -> ")))
+			}
+		}
+	}
+
 	return nil
 }
 
