@@ -45,8 +45,14 @@ func TestDepsCmd_HeuristicMode(t *testing.T) {
 	tmpDir := setupDepsTestDir(t)
 
 	oldDir, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldDir)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir to tmpDir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Fatalf("chdir back: %v", err)
+		}
+	}()
 
 	oldDetector := testDepsDetector
 	testDepsDetector = &deps.MockDetector{
@@ -85,8 +91,14 @@ func TestDepsCmd_DryRun(t *testing.T) {
 	tmpDir := setupDepsTestDir(t)
 
 	oldDir, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldDir)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir to tmpDir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Fatalf("chdir back: %v", err)
+		}
+	}()
 
 	oldDetector := testDepsDetector
 	testDepsDetector = &deps.MockDetector{
@@ -122,8 +134,14 @@ func TestDepsCmd_CycleWarning(t *testing.T) {
 	tmpDir := setupDepsTestDir(t)
 
 	oldDir, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldDir)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir to tmpDir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Fatalf("chdir back: %v", err)
+		}
+	}()
 
 	oldDetector := testDepsDetector
 	testDepsDetector = &deps.MockDetector{

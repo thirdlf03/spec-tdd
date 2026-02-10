@@ -360,7 +360,7 @@ func TestBatchGenerateWithFallback(t *testing.T) {
 		}
 
 		segments := make([]*kire.Segment, 2)
-		results, err := batchGenerateWithFallback(nil, mock, segments)
+		results, err := batchGenerateWithFallback(context.TODO(), mock, segments)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -395,7 +395,7 @@ func TestBatchGenerateWithFallback(t *testing.T) {
 			segments[i] = &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg"}}
 		}
 
-		results, err := batchGenerateWithFallback(nil, mock, segments)
+		results, err := batchGenerateWithFallback(context.TODO(), mock, segments)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -432,7 +432,7 @@ func TestBatchGenerateWithFallback(t *testing.T) {
 			segments[i] = &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg"}}
 		}
 
-		results, err := batchGenerateWithFallback(nil, mock, segments)
+		results, err := batchGenerateWithFallback(context.TODO(), mock, segments)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -451,7 +451,7 @@ func TestBatchGenerateWithFallback(t *testing.T) {
 		}
 
 		segments := make([]*kire.Segment, 2)
-		_, err := batchGenerateWithFallback(nil, mock, segments)
+		_, err := batchGenerateWithFallback(context.TODO(), mock, segments)
 		if err == nil {
 			t.Fatal("expected error")
 		}

@@ -42,8 +42,14 @@ func TestGuideCmd_GeneratesFile(t *testing.T) {
 	tmpDir := setupGuideTestDir(t)
 
 	oldDir, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldDir)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir to tmpDir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Fatalf("chdir back: %v", err)
+		}
+	}()
 
 	var buf bytes.Buffer
 	rootCmd.SetOut(&buf)
@@ -96,8 +102,14 @@ func TestGuideCmd_CycleError(t *testing.T) {
 	}
 
 	oldDir, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldDir)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir to tmpDir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Fatalf("chdir back: %v", err)
+		}
+	}()
 
 	var buf bytes.Buffer
 	rootCmd.SetOut(&buf)
@@ -113,8 +125,14 @@ func TestGuideCmd_CustomOutput(t *testing.T) {
 	tmpDir := setupGuideTestDir(t)
 
 	oldDir, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldDir)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir to tmpDir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(oldDir); err != nil {
+			t.Fatalf("chdir back: %v", err)
+		}
+	}()
 
 	outputPath := filepath.Join(tmpDir, "custom-guide.md")
 
