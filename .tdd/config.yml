@@ -1,0 +1,4 @@
+specDir: .tdd/specs
+testDir: tests
+runner: vitest
+fileNamePattern: req-{{id}}-{{slug}}.test.ts

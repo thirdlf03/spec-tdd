@@ -80,6 +80,42 @@ Outputs:
 - `tests/*.test.ts` (skeletons with TODO error)
 - `.tdd/trace.json`, `.tdd/trace.md`, `.tdd/map.md`
 
+## Full Pipeline (hone → kire → spec-tdd)
+
+`#` 見出しのない Markdown 仕様書から、テストスケルトンとトレーサビリティレポートを生成するフルパイプライン。
+
+```bash
+# 1. hone: 見出し構造を付与 (# がない仕様書の場合)
+hone --mode llm -o spec-headed.md spec.md
+# または heuristic モード (LLM 不要)
+hone -o spec-headed.md spec.md
+
+# 2. kire: 見出し単位でセグメント分割
+kire --in spec-headed.md -o .kire --jsonl --force --quiet
+
+# 3. spec-tdd: セグメントから REQ/Example を構造化
+spec-tdd init
+spec-tdd import kire --jsonl .kire/spec-headed/metadata.jsonl --dir .kire/spec-headed --enrich
+
+# 4. テストスケルトン生成 + トレーサビリティ
+spec-tdd scaffold
+spec-tdd trace
+spec-tdd map
+```
+
+ワンライナー (# 付き仕様書の場合は hone 不要):
+```bash
+kire --in spec.md -o .kire --jsonl --force --quiet && \
+  spec-tdd init && \
+  spec-tdd import kire --enrich && \
+  spec-tdd scaffold && spec-tdd trace && spec-tdd map
+```
+
+### 既知の制約
+- `--enrich` は `GEMINI_API_KEY` 環境変数が必要
+- enricher がデータ定義 + API仕様の混在セグメントを overview/NFR と誤判定することがある
+- 非 enrich パスでは `#` 見出しと `### REQ-XXX:` パターンが必須
+
 ## Gotchas
 
 - Don't shadow stdlib package names (`errors`, `log`, etc.)

@@ -1,4 +1,4 @@
-.PHONY: build install test clean run help docs
+.PHONY: build install test clean run help docs demo
 
 # Build variables
 BINARY_NAME=spec-tdd
@@ -56,6 +56,67 @@ lint:
 vet:
 	@echo "Running go vet..."
 	go vet ./...
+
+DEMO_DIR=/tmp/spec-tdd-demo
+DEMO_SPEC=$(DEMO_DIR)/auth-spec.md
+
+## demo: Run kire → spec-tdd end-to-end workflow test
+demo: build
+	@rm -rf $(DEMO_DIR)
+	@mkdir -p $(DEMO_DIR)
+	@printf '%s\n' \
+		'# 認証システム仕様' \
+		'' \
+		'## ログイン機能' \
+		'' \
+		'### REQ-001: ログイン認証' \
+		'' \
+		'ユーザーはメールアドレスとパスワードでログインできる。' \
+		'' \
+		'- Given: 有効なアカウントが存在する' \
+		'- When: 正しいメールアドレスとパスワードでログインする' \
+		'- Then: JWTトークンが返却される' \
+		'' \
+		'- Given: 有効なアカウントが存在する' \
+		'- When: 間違ったパスワードでログインする' \
+		'- Then: 401エラーが返却される' \
+		'' \
+		'## アカウントロック' \
+		'' \
+		'### REQ-002: アカウントロック機能' \
+		'' \
+		'連続でログインに失敗するとアカウントをロックする。' \
+		'' \
+		'- Given: 有効なアカウントが存在する' \
+		'- When: 5回連続でログインに失敗する' \
+		'- Then: アカウントがロックされる' \
+		'' \
+		'- Given: アカウントがロックされている' \
+		'- When: 正しいパスワードでログインを試みる' \
+		'- Then: ロック中のエラーメッセージが表示される' \
+		'' \
+		'ロック解除までの時間は30分で良いか？' \
+		> $(DEMO_SPEC)
+	@echo "=== [1/6] kire: Markdownを分割 ==="
+	@cd $(DEMO_DIR) && kire --in auth-spec.md -o .kire --jsonl --force --quiet
+	@echo "=== [2/6] spec-tdd init ==="
+	@cd $(DEMO_DIR) && $(CURDIR)/$(BINARY_NAME) init
+	@echo "=== [3/6] spec-tdd import kire ==="
+	@cd $(DEMO_DIR) && $(CURDIR)/$(BINARY_NAME) import kire \
+		--jsonl .kire/auth-spec/metadata.jsonl \
+		--dir .kire/auth-spec \
+		$(if $(GEMINI_API_KEY),--enrich,)
+	@echo "=== [4/6] spec-tdd scaffold ==="
+	@cd $(DEMO_DIR) && $(CURDIR)/$(BINARY_NAME) scaffold
+	@echo "=== [5/6] spec-tdd trace ==="
+	@cd $(DEMO_DIR) && $(CURDIR)/$(BINARY_NAME) trace
+	@echo "=== [6/6] spec-tdd map ==="
+	@cd $(DEMO_DIR) && $(CURDIR)/$(BINARY_NAME) map
+	@echo ""
+	@echo "=== Results ==="
+	@cat $(DEMO_DIR)/.tdd/trace.md
+	@echo ""
+	@echo "Demo workspace: $(DEMO_DIR)"
 
 ## docs: Generate documentation
 docs: build

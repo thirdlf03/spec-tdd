@@ -158,9 +158,13 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 			enrichedCount++
 
 			// Use enrichment result
-			id := result.ReqID
+			id := ""
+			if result.ReqID != "" {
+				// Normalize LLM-returned req_id (may contain extra text)
+				id = kire.ExtractReqID(result.ReqID)
+			}
 			if id == "" {
-				// Check regex extraction too
+				// Fallback: extract from segment content
 				if regexID, regexTitle := kire.ExtractReqIDWithTitle(seg.Content); regexID != "" {
 					id = regexID
 					if result.Title == "" {
