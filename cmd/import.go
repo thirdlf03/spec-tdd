@@ -183,6 +183,9 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 			}
 
 			title := result.Title
+			if title == "" && len(seg.Meta.HeadingPath) > 0 {
+				title = seg.Meta.HeadingPath[len(seg.Meta.HeadingPath)-1]
+			}
 			if title == "" {
 				title = extractFirstHeading(seg.Content)
 			}

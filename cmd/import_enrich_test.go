@@ -328,6 +328,40 @@ func TestImportKireEnrich(t *testing.T) {
 		}
 	})
 
+	t.Run("HeadingPath fallback when enrichment returns empty title", func(t *testing.T) {
+		tmpDir := setupEnrichTestDir(t)
+
+		// Enricher returns empty title for functional requirement
+		results := []*enrich.EnrichResult{
+			{Category: enrich.CategoryOverview, Title: "概要"},
+			{Category: enrich.CategoryFunctionalRequirement, ReqID: "REQ-001", Title: ""},
+			{Category: enrich.CategoryNonFunctionalRequirement, Title: "非機能要件"},
+		}
+		testEnricher = &sequentialMockEnricher{results: results}
+		t.Cleanup(func() {
+			testEnricher = nil
+		})
+
+		setEnrichFlags(t, true)
+
+		var buf bytes.Buffer
+		importKireCmd.SetOut(&buf)
+
+		if err := importKireCmd.RunE(importKireCmd, []string{}); err != nil {
+			t.Fatalf("importKireCmd error: %v", err)
+		}
+
+		// Title should fall back to HeadingPath last element "ログイン"
+		specDir := filepath.Join(tmpDir, ".tdd", "specs")
+		s, err := spec.Load(filepath.Join(specDir, "REQ-001.yml"))
+		if err != nil {
+			t.Fatalf("Load REQ-001 error: %v", err)
+		}
+		if s.Title != "ログイン" {
+			t.Errorf("Title = %q, want 'ログイン' (HeadingPath fallback)", s.Title)
+		}
+	})
+
 	t.Run("duplicate REQ-ID detection", func(t *testing.T) {
 		setupEnrichTestDir(t)
 
