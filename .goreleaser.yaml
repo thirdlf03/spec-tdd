@@ -44,31 +44,31 @@ archives:
       - README.md
       - LICENSE
 
-# homebrew_casks:
-#   - repository:
-#       owner: YOUR_USERNAME
-#       name: homebrew-tap
-#       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-#     hooks:
-#       post:
-#         install: |
-#           if OS.mac?
-#             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/app"]
-#           end
-#     caveats: |
-#       Shell completion:
-#
-#         # Bash
-#         source <(app completion bash)
-#
-#         # Zsh (add to .zshrc)
-#         source <(app completion zsh)
-#
-#         # Fish
-#         app completion fish | source
-#     homepage: "https://github.com/YOUR_USERNAME/YOUR_PROJECT"
-#     description: "Your project description"
-#     license: "MIT"
+homebrew_casks:
+  - repository:
+      owner: thirdlf03
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/spec-tdd"]
+          end
+    caveats: |
+      Shell completion:
+
+        # Bash
+        source <(spec-tdd completion bash)
+
+        # Zsh (add to .zshrc)
+        source <(spec-tdd completion zsh)
+
+        # Fish
+        spec-tdd completion fish | source
+    homepage: "https://github.com/thirdlf03/spec-tdd"
+    description: "Spec-driven TDD workflow CLI"
+    license: "MIT"
 
 checksum:
   name_template: 'checksums.txt'
