@@ -372,7 +372,7 @@ func TestBatchGenerateWithFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("truncated triggers 2-split retry", func(t *testing.T) {
+	t.Run("truncated triggers recursive split", func(t *testing.T) {
 		callCount := 0
 		mock := &splitRetryMockBatchEnricher{
 			classifyResults: nil,
@@ -409,6 +409,42 @@ func TestBatchGenerateWithFallback(t *testing.T) {
 		}
 	})
 
+	t.Run("large batch auto-splits by maxBatchSize", func(t *testing.T) {
+		callCount := 0
+		mock := &splitRetryMockBatchEnricher{
+			classifyResults: nil,
+			onExample: func(segs int) ([]enrich.BatchExampleResult, error) {
+				callCount++
+				if segs > maxBatchSize {
+					t.Errorf("batch size %d exceeds maxBatchSize %d", segs, maxBatchSize)
+				}
+				results := make([]enrich.BatchExampleResult, segs)
+				for i := range results {
+					results[i] = enrich.BatchExampleResult{SegmentID: "seg"}
+				}
+				return results, nil
+			},
+		}
+
+		// 30 segments → should be split into batches <= maxBatchSize
+		segments := make([]*kire.Segment, 30)
+		for i := range segments {
+			segments[i] = &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg"}}
+		}
+
+		results, err := batchGenerateWithFallback(nil, mock, segments)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 30 {
+			t.Errorf("results count = %d, want 30", len(results))
+		}
+		// 30 segments / maxBatchSize(10) → needs multiple calls
+		if callCount < 3 {
+			t.Errorf("callCount = %d, want at least 3", callCount)
+		}
+	})
+
 	t.Run("non-truncation error returns immediately", func(t *testing.T) {
 		mock := &enrich.MockBatchEnricher{
 			ExampleErr: os.ErrPermission,
@@ -437,4 +473,139 @@ func (m *splitRetryMockBatchEnricher) BatchClassify(_ context.Context, _ []*kire
 
 func (m *splitRetryMockBatchEnricher) BatchGenerateExamples(_ context.Context, segs []*kire.Segment) ([]enrich.BatchExampleResult, error) {
 	return m.onExample(len(segs))
+}
+
+func TestMergeEntriesByReqID(t *testing.T) {
+	t.Run("merges entries with same REQ-ID", func(t *testing.T) {
+		entries := []importEntry{
+			{
+				seg: &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg-001"}},
+				spec: &spec.Spec{
+					ID:        "REQ-001",
+					Title:     "ログイン",
+					Examples:  []spec.Example{{ID: "E1", Given: "G1", When: "W1", Then: "T1"}},
+					Questions: []string{"Q1"},
+				},
+			},
+			{
+				seg: &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg-002"}},
+				spec: &spec.Spec{
+					ID:        "REQ-002",
+					Title:     "ログアウト",
+					Examples:  []spec.Example{{ID: "E1", Given: "G2", When: "W2", Then: "T2"}},
+					Questions: []string{"Q2"},
+				},
+			},
+			{
+				seg: &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg-003"}},
+				spec: &spec.Spec{
+					ID:        "REQ-001",
+					Title:     "ログイン (続き)",
+					Examples:  []spec.Example{{ID: "E1", Given: "G3", When: "W3", Then: "T3"}},
+					Questions: []string{"Q1", "Q3"},
+				},
+			},
+		}
+
+		result := mergeEntriesByReqID(entries)
+
+		if len(result) != 2 {
+			t.Fatalf("result count = %d, want 2", len(result))
+		}
+
+		// REQ-001 should be first (出現順保持)
+		r1 := result[0]
+		if r1.spec.ID != "REQ-001" {
+			t.Errorf("result[0].ID = %q, want REQ-001", r1.spec.ID)
+		}
+		// タイトルは最初のエントリ
+		if r1.spec.Title != "ログイン" {
+			t.Errorf("result[0].Title = %q, want 'ログイン'", r1.spec.Title)
+		}
+		// Examples 結合・再採番
+		if len(r1.spec.Examples) != 2 {
+			t.Fatalf("result[0].Examples count = %d, want 2", len(r1.spec.Examples))
+		}
+		if r1.spec.Examples[0].ID != "E1" || r1.spec.Examples[0].Given != "G1" {
+			t.Errorf("result[0].Examples[0] = %+v", r1.spec.Examples[0])
+		}
+		if r1.spec.Examples[1].ID != "E2" || r1.spec.Examples[1].Given != "G3" {
+			t.Errorf("result[0].Examples[1] = %+v", r1.spec.Examples[1])
+		}
+		// Questions 重複除去
+		if len(r1.spec.Questions) != 2 {
+			t.Fatalf("result[0].Questions count = %d, want 2", len(r1.spec.Questions))
+		}
+		if r1.spec.Questions[0] != "Q1" || r1.spec.Questions[1] != "Q3" {
+			t.Errorf("result[0].Questions = %v", r1.spec.Questions)
+		}
+
+		// REQ-002 should be second
+		r2 := result[1]
+		if r2.spec.ID != "REQ-002" {
+			t.Errorf("result[1].ID = %q, want REQ-002", r2.spec.ID)
+		}
+	})
+
+	t.Run("no duplicates returns unchanged", func(t *testing.T) {
+		entries := []importEntry{
+			{
+				seg:  &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg-001"}},
+				spec: &spec.Spec{ID: "REQ-001", Title: "A", Examples: []spec.Example{{Given: "G", When: "W", Then: "T"}}},
+			},
+			{
+				seg:  &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg-002"}},
+				spec: &spec.Spec{ID: "REQ-002", Title: "B"},
+			},
+		}
+
+		result := mergeEntriesByReqID(entries)
+
+		if len(result) != 2 {
+			t.Fatalf("result count = %d, want 2", len(result))
+		}
+		if result[0].spec.ID != "REQ-001" || result[1].spec.ID != "REQ-002" {
+			t.Errorf("IDs = [%s, %s]", result[0].spec.ID, result[1].spec.ID)
+		}
+		// Example IDs should still be renumbered
+		if len(result[0].spec.Examples) == 1 && result[0].spec.Examples[0].ID != "E1" {
+			t.Errorf("Examples[0].ID = %q, want E1", result[0].spec.Examples[0].ID)
+		}
+	})
+
+	t.Run("empty input returns empty", func(t *testing.T) {
+		result := mergeEntriesByReqID(nil)
+		if len(result) != 0 {
+			t.Errorf("result count = %d, want 0", len(result))
+		}
+	})
+
+	t.Run("preserves source from first entry", func(t *testing.T) {
+		entries := []importEntry{
+			{
+				seg: &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg-001"}},
+				spec: &spec.Spec{
+					ID:    "REQ-001",
+					Title: "A",
+					Source: spec.SourceInfo{SegmentID: "seg-001", FilePath: "first.md"},
+				},
+			},
+			{
+				seg: &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg-005"}},
+				spec: &spec.Spec{
+					ID:    "REQ-001",
+					Title: "A continued",
+					Source: spec.SourceInfo{SegmentID: "seg-005", FilePath: "second.md"},
+				},
+			},
+		}
+
+		result := mergeEntriesByReqID(entries)
+		if len(result) != 1 {
+			t.Fatalf("result count = %d, want 1", len(result))
+		}
+		if result[0].spec.Source.FilePath != "first.md" {
+			t.Errorf("Source.FilePath = %q, want 'first.md'", result[0].spec.Source.FilePath)
+		}
+	})
 }

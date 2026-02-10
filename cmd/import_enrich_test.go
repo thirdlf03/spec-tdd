@@ -378,13 +378,15 @@ func TestImportKireEnrich(t *testing.T) {
 		}
 	})
 
-	t.Run("duplicate REQ-ID detection", func(t *testing.T) {
-		setupEnrichTestDir(t)
+	t.Run("duplicate REQ-ID merges entries", func(t *testing.T) {
+		tmpDir := setupEnrichTestDir(t)
 
-		// Both segments classified as functional with same REQ-ID
+		// Both segments classified as functional with same REQ-ID → should be merged
 		results := []*enrich.EnrichResult{
-			{Category: enrich.CategoryFunctionalRequirement, ReqID: "REQ-001", Title: "機能A"},
-			{Category: enrich.CategoryFunctionalRequirement, ReqID: "REQ-001", Title: "機能B"},
+			{Category: enrich.CategoryFunctionalRequirement, ReqID: "REQ-001", Title: "機能A",
+				Examples: []spec.Example{{Given: "GA", When: "WA", Then: "TA"}}},
+			{Category: enrich.CategoryFunctionalRequirement, ReqID: "REQ-001", Title: "機能B",
+				Examples: []spec.Example{{Given: "GB", When: "WB", Then: "TB"}}},
 			{Category: enrich.CategoryNonFunctionalRequirement, Title: "非機能要件"},
 		}
 		testEnricher = &sequentialMockEnricher{results: results}
@@ -398,11 +400,34 @@ func TestImportKireEnrich(t *testing.T) {
 		importKireCmd.SetOut(&buf)
 
 		err := importKireCmd.RunE(importKireCmd, []string{})
-		if err == nil {
-			t.Fatal("expected error for duplicate REQ-IDs")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(err.Error(), "REQ-001") {
-			t.Errorf("error should mention REQ-001, got: %v", err)
+
+		// REQ-001 merged + REQ-002 (NFR) = 2 created
+		output := buf.String()
+		if !strings.Contains(output, "2 created") {
+			t.Errorf("expected '2 created', got: %s", output)
+		}
+
+		specDir := filepath.Join(tmpDir, ".tdd", "specs")
+		s, err := spec.Load(filepath.Join(specDir, "REQ-001.yml"))
+		if err != nil {
+			t.Fatalf("Load REQ-001 error: %v", err)
+		}
+		// Title should be from first entry
+		if s.Title != "機能A" {
+			t.Errorf("Title = %q, want '機能A'", s.Title)
+		}
+		// Examples should be merged (2 examples from 2 entries)
+		if len(s.Examples) != 2 {
+			t.Fatalf("Examples count = %d, want 2", len(s.Examples))
+		}
+		if s.Examples[0].Given != "GA" {
+			t.Errorf("Examples[0].Given = %q, want 'GA'", s.Examples[0].Given)
+		}
+		if s.Examples[1].Given != "GB" {
+			t.Errorf("Examples[1].Given = %q, want 'GB'", s.Examples[1].Given)
 		}
 	})
 }

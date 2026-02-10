@@ -282,15 +282,9 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Check for duplicate REQ-IDs
+	// 同一 REQ-ID のエントリをマージ
 	if enrichEnabled {
-		var ids []string
-		for _, entry := range entries {
-			ids = append(ids, entry.spec.ID)
-		}
-		if err := kire.CheckDuplicateReqIDs(ids); err != nil {
-			return err
-		}
+		entries = mergeEntriesByReqID(entries)
 	}
 
 	if err := saveEntries(cmd, entries, cfg.SpecDir, force, dryRun); err != nil {
@@ -435,36 +429,36 @@ func runBatchEnrich(cmd *cobra.Command, log interface{ Warn(string, ...any) }, b
 		entries = append(entries, importEntry{seg: seg, spec: s})
 	}
 
-	// Check for duplicate REQ-IDs
-	var ids []string
-	for _, entry := range entries {
-		ids = append(ids, entry.spec.ID)
-	}
-	if err := kire.CheckDuplicateReqIDs(ids); err != nil {
-		return nil, err
-	}
+	// 同一 REQ-ID のエントリをマージ
+	entries = mergeEntriesByReqID(entries)
 
 	return entries, nil
 }
 
-// batchGenerateWithFallback は BatchGenerateExamples を呼び、切断時に2分割リトライする。
+const maxBatchSize = 10
+
+// batchGenerateWithFallback は BatchGenerateExamples を呼び、
+// maxBatchSize 超過時またはトークン切断時に再帰的に分割する。
 func batchGenerateWithFallback(ctx context.Context, be enrich.BatchEnricher, targetSegments []*kire.Segment) ([]enrich.BatchExampleResult, error) {
-	results, err := be.BatchGenerateExamples(ctx, targetSegments)
-	if err == nil {
-		return results, nil
-	}
-	if !errors.Is(err, enrich.ErrBatchTruncated) {
-		return nil, err
+	if len(targetSegments) <= maxBatchSize {
+		results, err := be.BatchGenerateExamples(ctx, targetSegments)
+		if err == nil {
+			return results, nil
+		}
+		if !errors.Is(err, enrich.ErrBatchTruncated) {
+			return nil, err
+		}
+		// truncated: 1件以下なら諦め
+		if len(targetSegments) <= 1 {
+			return results, nil
+		}
+		// fall through to split
 	}
 
-	// 2分割リトライ
+	// 分割して再帰
 	mid := len(targetSegments) / 2
-	if mid == 0 {
-		return results, nil
-	}
-
-	r1, err1 := be.BatchGenerateExamples(ctx, targetSegments[:mid])
-	r2, err2 := be.BatchGenerateExamples(ctx, targetSegments[mid:])
+	r1, err1 := batchGenerateWithFallback(ctx, be, targetSegments[:mid])
+	r2, err2 := batchGenerateWithFallback(ctx, be, targetSegments[mid:])
 
 	var combined []enrich.BatchExampleResult
 	if err1 == nil {
@@ -562,6 +556,68 @@ func buildEntryFromRegex(seg *kire.Segment, autoNext *int) importEntry {
 	}
 
 	return importEntry{seg: seg, spec: s}
+}
+
+// mergeEntriesByReqID は同一 REQ-ID を持つエントリを統合する。
+// マージルール:
+// - タイトル: 最初のエントリを使用
+// - Examples: 全エントリの Examples を結合 → E1, E2, ... と再採番
+// - Questions: 全エントリの Questions を結合（重複除去）
+// - Source: 最初のエントリの SourceInfo を維持
+// - 出現順序を保持: 最初に出現した位置に統合
+func mergeEntriesByReqID(entries []importEntry) []importEntry {
+	type mergedEntry struct {
+		entry importEntry
+		index int // 最初に出現した位置
+	}
+
+	seen := make(map[string]*mergedEntry, len(entries))
+	var order []string
+
+	for i, e := range entries {
+		id := e.spec.ID
+		if existing, ok := seen[id]; ok {
+			// Examples を結合
+			existing.entry.spec.Examples = append(existing.entry.spec.Examples, e.spec.Examples...)
+			// Questions を結合（重複除去）
+			qSet := make(map[string]struct{}, len(existing.entry.spec.Questions))
+			for _, q := range existing.entry.spec.Questions {
+				qSet[q] = struct{}{}
+			}
+			for _, q := range e.spec.Questions {
+				if _, dup := qSet[q]; !dup {
+					existing.entry.spec.Questions = append(existing.entry.spec.Questions, q)
+					qSet[q] = struct{}{}
+				}
+			}
+		} else {
+			// ディープコピー
+			specCopy := *e.spec
+			exCopy := make([]spec.Example, len(e.spec.Examples))
+			copy(exCopy, e.spec.Examples)
+			specCopy.Examples = exCopy
+			qCopy := make([]string, len(e.spec.Questions))
+			copy(qCopy, e.spec.Questions)
+			specCopy.Questions = qCopy
+
+			seen[id] = &mergedEntry{
+				entry: importEntry{seg: e.seg, spec: &specCopy},
+				index: i,
+			}
+			order = append(order, id)
+		}
+	}
+
+	// Examples 再採番
+	result := make([]importEntry, 0, len(order))
+	for _, id := range order {
+		me := seen[id]
+		for j := range me.entry.spec.Examples {
+			me.entry.spec.Examples[j].ID = fmt.Sprintf("E%d", j+1)
+		}
+		result = append(result, me.entry)
+	}
+	return result
 }
 
 // extractFirstHeading returns the text of the first Markdown heading in content.
