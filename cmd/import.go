@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,6 +32,9 @@ var importKireCmd = &cobra.Command{
 // nil の場合は実際の GeminiEnricher を使用する。
 var testEnricher enrich.Enricher
 
+// testBatchEnricher はテスト用に BatchEnricher を差し替えるための変数。
+var testBatchEnricher enrich.BatchEnricher
+
 func init() {
 	rootCmd.AddCommand(importCmd)
 	importCmd.AddCommand(importKireCmd)
@@ -42,6 +46,8 @@ func init() {
 	importKireCmd.Flags().Bool("enrich", false, "Enable LLM enrichment (requires GEMINI_API_KEY)")
 	importKireCmd.Flags().String("enrich-model", "gemini-2.5-flash-lite", "Gemini model name for enrichment")
 	importKireCmd.Flags().Duration("enrich-timeout", 30*time.Second, "Timeout for each Gemini API call")
+	importKireCmd.Flags().String("enrich-example-model", "", "Example generation model (enables 2-pass batch mode)")
+	importKireCmd.Flags().Duration("enrich-example-timeout", 120*time.Second, "Timeout for batch example generation")
 }
 
 var batchReqIDPattern = regexp.MustCompile(`REQ-(\d{3})`)
@@ -66,26 +72,56 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 	enrichEnabled, _ := cmd.Flags().GetBool("enrich")
 	enrichModel, _ := cmd.Flags().GetString("enrich-model")
 	enrichTimeout, _ := cmd.Flags().GetDuration("enrich-timeout")
+	enrichExampleModel, _ := cmd.Flags().GetString("enrich-example-model")
+	enrichExampleTimeout, _ := cmd.Flags().GetDuration("enrich-example-timeout")
 
-	// Initialize enricher if --enrich is enabled
+	// 2-pass batch mode: --enrich --enrich-example-model <model>
+	batchMode := enrichEnabled && enrichExampleModel != ""
+
+	// Initialize enricher if --enrich is enabled (1-pass mode)
 	var enricher enrich.Enricher
+	var batchEnricher enrich.BatchEnricher
 	if enrichEnabled {
-		if testEnricher != nil {
-			enricher = testEnricher
+		if batchMode {
+			// 2-pass batch mode
+			if testBatchEnricher != nil {
+				batchEnricher = testBatchEnricher
+			} else {
+				apiKey := os.Getenv("GEMINI_API_KEY")
+				if apiKey == "" {
+					return fmt.Errorf("GEMINI_API_KEY is required when --enrich is enabled. Set it with: export GEMINI_API_KEY=your-key")
+				}
+				be, err := enrich.NewGeminiBatchEnricher(enrich.GeminiBatchEnricherConfig{
+					APIKey:          apiKey,
+					ClassifyModel:   enrichModel,
+					ExampleModel:    enrichExampleModel,
+					ClassifyTimeout: enrichTimeout,
+					ExampleTimeout:  enrichExampleTimeout,
+				})
+				if err != nil {
+					return err
+				}
+				batchEnricher = be
+			}
 		} else {
-			apiKey := os.Getenv("GEMINI_API_KEY")
-			if apiKey == "" {
-				return fmt.Errorf("GEMINI_API_KEY is required when --enrich is enabled. Set it with: export GEMINI_API_KEY=your-key")
+			// 1-pass mode
+			if testEnricher != nil {
+				enricher = testEnricher
+			} else {
+				apiKey := os.Getenv("GEMINI_API_KEY")
+				if apiKey == "" {
+					return fmt.Errorf("GEMINI_API_KEY is required when --enrich is enabled. Set it with: export GEMINI_API_KEY=your-key")
+				}
+				e, err := enrich.NewGeminiEnricher(enrich.GeminiEnricherConfig{
+					APIKey:  apiKey,
+					Model:   enrichModel,
+					Timeout: enrichTimeout,
+				})
+				if err != nil {
+					return err
+				}
+				enricher = e
 			}
-			e, err := enrich.NewGeminiEnricher(enrich.GeminiEnricherConfig{
-				APIKey:  apiKey,
-				Model:   enrichModel,
-				Timeout: enrichTimeout,
-			})
-			if err != nil {
-				return err
-			}
-			enricher = e
 		}
 	}
 
@@ -121,18 +157,38 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Phase 2: Assign IDs deterministically
-	autoNext := maxExplicit
-	var entries []importEntry
-	var enrichedCount, skippedEnrich, errorsEnrich int
-
+	// Filter out nil segments
+	var validSegments []*kire.Segment
 	for i, seg := range segments {
 		if seg == nil {
 			log.Warn("segment file not found, skipping", "segment_id", metas[i].SegmentID, "file", metas[i].FilePath)
 			fmt.Fprintf(cmd.OutOrStdout(), "warning: segment file not found: %s (%s)\n", metas[i].SegmentID, metas[i].FilePath)
-			continue
+		} else {
+			validSegments = append(validSegments, seg)
 		}
+	}
 
+	// 2-pass batch mode
+	if batchMode && batchEnricher != nil {
+		entries, err := runBatchEnrich(cmd, log, batchEnricher, validSegments, maxExplicit)
+		if err != nil {
+			return err
+		}
+		if err := saveEntries(cmd, entries, cfg.SpecDir, force, dryRun); err != nil {
+			return err
+		}
+		if !dryRun {
+			fmt.Fprintf(cmd.OutOrStdout(), "%d enriched\n", len(entries))
+		}
+		return nil
+	}
+
+	// Phase 2: Assign IDs deterministically (1-pass or no-enrich)
+	autoNext := maxExplicit
+	var entries []importEntry
+	var enrichedCount, skippedEnrich, errorsEnrich int
+
+	for _, seg := range validSegments {
 		if enrichEnabled && enricher != nil {
 			// Enrichment pipeline
 			fmt.Fprintf(cmd.OutOrStdout(), "enriching: %s ... ", seg.Meta.SegmentID)
@@ -148,7 +204,7 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 				continue
 			}
 
-			if !result.IsRequirement() {
+			if !result.IsExampleTarget() {
 				fmt.Fprintf(cmd.OutOrStdout(), "skipped (%s)\n", result.Category)
 				skippedEnrich++
 				continue
@@ -236,12 +292,200 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Phase 3: Save specs
+	if err := saveEntries(cmd, entries, cfg.SpecDir, force, dryRun); err != nil {
+		return err
+	}
+
+	if enrichEnabled && !dryRun {
+		fmt.Fprintf(cmd.OutOrStdout(), "%d enriched, %d skipped, %d errors\n", enrichedCount, skippedEnrich, errorsEnrich)
+	}
+
+	return nil
+}
+
+// runBatchEnrich は 2-pass バッチ enrichment を実行する。
+func runBatchEnrich(cmd *cobra.Command, log interface{ Warn(string, ...any) }, be enrich.BatchEnricher, segments []*kire.Segment, maxExplicit int) ([]importEntry, error) {
+	if len(segments) == 0 {
+		return nil, nil
+	}
+
+	// Call 1: BatchClassify
+	fmt.Fprintf(cmd.OutOrStdout(), "classifying %d segments ... ", len(segments))
+	classifyResults, err := be.BatchClassify(context.Background(), segments)
+	if err != nil && !errors.Is(err, enrich.ErrBatchTruncated) {
+		return nil, fmt.Errorf("batch classify failed: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "done\n")
+
+	// Build segment lookup map
+	segMap := make(map[string]*kire.Segment, len(segments))
+	for _, seg := range segments {
+		segMap[seg.Meta.SegmentID] = seg
+	}
+
+	// Filter example-target segments (FR + NFR) and assign IDs
+	autoNext := maxExplicit
+	var targetSegments []*kire.Segment
+	var entries []importEntry
+	titleMap := make(map[string]string)   // segment_id -> title
+	idMap := make(map[string]string)      // segment_id -> REQ-ID
+	skippedCount := 0
+
+	for _, cr := range classifyResults {
+		seg, ok := segMap[cr.SegmentID]
+		if !ok {
+			continue
+		}
+
+		category := enrich.NormalizeCategory(string(cr.Category))
+		if !category.IsExampleTarget() {
+			fmt.Fprintf(cmd.OutOrStdout(), "  %s: skipped (%s)\n", cr.SegmentID, category)
+			skippedCount++
+			continue
+		}
+
+		// Resolve REQ-ID
+		id := ""
+		if cr.ReqID != "" {
+			id = kire.ExtractReqID(cr.ReqID)
+		}
+		if id == "" {
+			if regexID, regexTitle := kire.ExtractReqIDWithTitle(seg.Content); regexID != "" {
+				id = regexID
+				if cr.Title == "" {
+					cr.Title = regexTitle
+				}
+			}
+		}
+		if id == "" {
+			autoNext++
+			id = fmt.Sprintf("REQ-%03d", autoNext)
+		} else {
+			if m := batchReqIDPattern.FindStringSubmatch(id); len(m) == 2 {
+				n, _ := strconv.Atoi(m[1])
+				if n > maxExplicit {
+					maxExplicit = n
+					autoNext = maxExplicit
+				}
+			}
+		}
+
+		// Resolve title
+		title := strings.TrimSpace(cr.Title)
+		if title == "" && len(seg.Meta.HeadingPath) > 0 {
+			title = seg.Meta.HeadingPath[len(seg.Meta.HeadingPath)-1]
+		}
+		if title == "" {
+			title = extractFirstHeading(seg.Content)
+		}
+		if title == "" {
+			return nil, fmt.Errorf("empty title for segment %s after batch classify", cr.SegmentID)
+		}
+
+		targetSegments = append(targetSegments, seg)
+		idMap[cr.SegmentID] = id
+		titleMap[cr.SegmentID] = title
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "  %d requirements (FR+NFR), %d skipped\n", len(targetSegments), skippedCount)
+
+	// Call 2: BatchGenerateExamples for FR segments
+	exampleMap := make(map[string][]spec.Example)
+	if len(targetSegments) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "generating examples for %d segments ... ", len(targetSegments))
+		exResults, err := batchGenerateWithFallback(context.Background(), be, targetSegments)
+		if err != nil {
+			log.Warn("batch example generation failed", "error", err)
+			fmt.Fprintf(cmd.OutOrStdout(), "error\n")
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "done\n")
+			for _, er := range exResults {
+				exampleMap[er.SegmentID] = er.Examples
+			}
+		}
+	}
+
+	// Build entries
+	for _, seg := range targetSegments {
+		sid := seg.Meta.SegmentID
+		id := idMap[sid]
+		title := titleMap[sid]
+
+		existingExamples := kire.ExtractExamples(seg.Content)
+		enrichedExamples := exampleMap[sid]
+		examples := enrich.MergeExamples(existingExamples, enrichedExamples)
+
+		questions := kire.ExtractQuestions(seg.Content)
+
+		headingPath := make([]string, len(seg.Meta.HeadingPath))
+		copy(headingPath, seg.Meta.HeadingPath)
+
+		s := &spec.Spec{
+			ID:        id,
+			Title:     title,
+			Examples:  examples,
+			Questions: questions,
+			Source: spec.SourceInfo{
+				SegmentID:   sid,
+				HeadingPath: headingPath,
+			},
+		}
+		entries = append(entries, importEntry{seg: seg, spec: s})
+	}
+
+	// Check for duplicate REQ-IDs
+	var ids []string
+	for _, entry := range entries {
+		ids = append(ids, entry.spec.ID)
+	}
+	if err := kire.CheckDuplicateReqIDs(ids); err != nil {
+		return nil, err
+	}
+
+	return entries, nil
+}
+
+// batchGenerateWithFallback は BatchGenerateExamples を呼び、切断時に2分割リトライする。
+func batchGenerateWithFallback(ctx context.Context, be enrich.BatchEnricher, targetSegments []*kire.Segment) ([]enrich.BatchExampleResult, error) {
+	results, err := be.BatchGenerateExamples(ctx, targetSegments)
+	if err == nil {
+		return results, nil
+	}
+	if !errors.Is(err, enrich.ErrBatchTruncated) {
+		return nil, err
+	}
+
+	// 2分割リトライ
+	mid := len(targetSegments) / 2
+	if mid == 0 {
+		return results, nil
+	}
+
+	r1, err1 := be.BatchGenerateExamples(ctx, targetSegments[:mid])
+	r2, err2 := be.BatchGenerateExamples(ctx, targetSegments[mid:])
+
+	var combined []enrich.BatchExampleResult
+	if err1 == nil {
+		combined = append(combined, r1...)
+	}
+	if err2 == nil {
+		combined = append(combined, r2...)
+	}
+
+	if err1 != nil && err2 != nil {
+		return combined, fmt.Errorf("both halves failed: %v; %v", err1, err2)
+	}
+
+	return combined, nil
+}
+
+// saveEntries はエントリをファイルに保存する共通ヘルパー。
+func saveEntries(cmd *cobra.Command, entries []importEntry, specDir string, force, dryRun bool) error {
 	var created, skipped, overwritten int
 
 	for _, entry := range entries {
 		s := entry.spec
-		specPath := filepath.Join(cfg.SpecDir, s.ID+".yml")
+		specPath := filepath.Join(specDir, s.ID+".yml")
 
 		if dryRun {
 			fmt.Fprintf(cmd.OutOrStdout(), "[dry-run] %s: %s (%s)\n", s.ID, s.Title, specPath)
@@ -273,10 +517,6 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 
 	if !dryRun {
 		fmt.Fprintf(cmd.OutOrStdout(), "\n%d created, %d skipped, %d overwritten\n", created, skipped, overwritten)
-	}
-
-	if enrichEnabled && !dryRun {
-		fmt.Fprintf(cmd.OutOrStdout(), "%d enriched, %d skipped, %d errors\n", enrichedCount, skippedEnrich, errorsEnrich)
 	}
 
 	return nil

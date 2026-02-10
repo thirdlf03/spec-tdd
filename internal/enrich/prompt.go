@@ -41,11 +41,38 @@ const classifyAndEnrichPrompt = `あなたはソフトウェア仕様書の分�
 
 ### 4. Given/When/Then Examples 生成
 
-セグメントが functional_requirement の場合、正常系・異常系の記述から Given/When/Then 形式の Examples を生成してください。
-- 各 Example は given（前提条件）、when（操作）、then（期待結果）の3フィールドを持つ
-- APIエンドポイントごとに正常系・異常系（バリデーションエラー、Not Found、Conflict等）の Examples を生成する
-- functional_requirement でない場合は空配列を返す
-- 既に Given/When/Then 形式の記述がある場合はそれをそのまま使用する
+セグメントが functional_requirement または non_functional_requirement の場合、仕様から Given/When/Then 形式の Examples を生成してください。
+overview/other の場合は空配列を返してください。
+既に Given/When/Then 形式の記述がある場合はそれをそのまま使用してください。
+
+**Givenの書き方（重要）**:
+- テストの前提条件として「何が存在するか」「どういう状態か」を具体的に書く
+- 悪い例: "クライアントは有効な認証情報を持っている" ← テストで何を setUp すべきか不明
+- 良い例: "IDが'label-001'のラベルが存在する" ← setUp が明確
+- 良い例: "タスクAが存在し、blockedByが['taskB']である" ← 状態が具体的
+- 良い例: "IDが'deleted-001'のラベルが論理削除されている" ← エッジケースの状態
+
+**Whenの書き方**:
+- 機能要件: HTTPメソッド + パスを明記する
+- 非機能要件: 測定条件・負荷条件・セキュリティ操作を具体的に書く
+- 良い例(FR): "PATCH /v1/labels/label-001 にcolorを'#FF0000'に更新するリクエストを送信する"
+- 良い例(NFR): "100件の同時リクエストを送信する"
+- 良い例(NFR): "SQLインジェクション文字列を含むリクエストを送信する"
+
+**機能要件でカバーすべきケース**:
+- 各エンドポイントの正常系（CRUD成功）
+- バリデーションエラー（必須項目欠落、フォーマット不正、範囲外の値）
+- 存在しないリソースへの操作（404）
+- 重複・競合（409）
+- 論理削除済みリソースへの操作
+- 仕様に記載されたデータ正規化ルール（空白除去、重複除去、ソート等）
+- 状態遷移の制約（ロック、依存関係、親子関係）
+
+**非機能要件でカバーすべきケース**:
+- パフォーマンス: レスポンスタイム、スループット、同時接続数
+- セキュリティ: 認証・認可、インジェクション対策、暗号化
+- 可用性: 障害復旧、タイムアウト、リトライ
+- データ整合性: バックアップ、整合性チェック
 
 ## セグメント内容
 
@@ -77,9 +104,9 @@ var enrichResponseSchema = &genai.Schema{
 			Items: &genai.Schema{
 				Type: genai.TypeObject,
 				Properties: map[string]*genai.Schema{
-					"given": {Type: genai.TypeString, Description: "前提条件"},
-					"when":  {Type: genai.TypeString, Description: "操作・アクション"},
-					"then":  {Type: genai.TypeString, Description: "期待される結果"},
+					"given": {Type: genai.TypeString, Description: "テストの前提条件。何が存在しどういう状態かを具体的に記述"},
+					"when":  {Type: genai.TypeString, Description: "実行する操作。HTTPメソッド+パスを明記"},
+					"then":  {Type: genai.TypeString, Description: "期待される結果。HTTPステータスコードとレスポンス内容を含む"},
 				},
 				Required: []string{"given", "when", "then"},
 			},

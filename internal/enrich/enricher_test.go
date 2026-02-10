@@ -8,6 +8,73 @@ import (
 	"github.com/thirdlf03/spec-tdd/internal/spec"
 )
 
+// verify MockBatchEnricher satisfies BatchEnricher interface
+var _ BatchEnricher = (*MockBatchEnricher)(nil)
+
+func TestMockBatchEnricher(t *testing.T) {
+	t.Run("returns configured classify results", func(t *testing.T) {
+		mock := &MockBatchEnricher{
+			ClassifyResults: []BatchClassifyResult{
+				{SegmentID: "seg-0001", Category: CategoryFunctionalRequirement, Title: "テスト"},
+			},
+		}
+
+		results, err := mock.BatchClassify(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("results count = %d, want 1", len(results))
+		}
+		if mock.ClassifyCallCount != 1 {
+			t.Errorf("ClassifyCallCount = %d, want 1", mock.ClassifyCallCount)
+		}
+	})
+
+	t.Run("returns configured classify error", func(t *testing.T) {
+		mock := &MockBatchEnricher{
+			ClassifyErr: context.DeadlineExceeded,
+		}
+
+		_, err := mock.BatchClassify(context.Background(), nil)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("returns configured example results", func(t *testing.T) {
+		mock := &MockBatchEnricher{
+			ExampleResults: []BatchExampleResult{
+				{SegmentID: "seg-0001", Examples: []spec.Example{
+					{Given: "a", When: "b", Then: "c"},
+				}},
+			},
+		}
+
+		results, err := mock.BatchGenerateExamples(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("results count = %d, want 1", len(results))
+		}
+		if mock.ExampleCallCount != 1 {
+			t.Errorf("ExampleCallCount = %d, want 1", mock.ExampleCallCount)
+		}
+	})
+
+	t.Run("returns configured example error", func(t *testing.T) {
+		mock := &MockBatchEnricher{
+			ExampleErr: ErrBatchTruncated,
+		}
+
+		_, err := mock.BatchGenerateExamples(context.Background(), nil)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
+
 func TestMockEnricher(t *testing.T) {
 	t.Run("returns configured result", func(t *testing.T) {
 		mock := &MockEnricher{

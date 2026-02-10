@@ -28,3 +28,39 @@ func (m *MockEnricher) Enrich(_ context.Context, segment *kire.Segment) (*Enrich
 	}
 	return m.Result, nil
 }
+
+// BatchEnricher はバッチ enrichment を抽象化する。
+type BatchEnricher interface {
+	// BatchClassify は全セグメントをバッチ分類する。
+	BatchClassify(ctx context.Context, segments []*kire.Segment) ([]BatchClassifyResult, error)
+	// BatchGenerateExamples は FR セグメントのバッチ Example 生成を行う。
+	BatchGenerateExamples(ctx context.Context, segments []*kire.Segment) ([]BatchExampleResult, error)
+}
+
+// MockBatchEnricher はテスト用の BatchEnricher 実装。
+type MockBatchEnricher struct {
+	ClassifyResults  []BatchClassifyResult
+	ClassifyErr      error
+	ExampleResults   []BatchExampleResult
+	ExampleErr       error
+	ClassifyCallCount int
+	ExampleCallCount  int
+}
+
+// BatchClassify は設定された分類結果を返す。
+func (m *MockBatchEnricher) BatchClassify(_ context.Context, _ []*kire.Segment) ([]BatchClassifyResult, error) {
+	m.ClassifyCallCount++
+	if m.ClassifyErr != nil {
+		return nil, m.ClassifyErr
+	}
+	return m.ClassifyResults, nil
+}
+
+// BatchGenerateExamples は設定された Example 結果を返す。
+func (m *MockBatchEnricher) BatchGenerateExamples(_ context.Context, _ []*kire.Segment) ([]BatchExampleResult, error) {
+	m.ExampleCallCount++
+	if m.ExampleErr != nil {
+		return nil, m.ExampleErr
+	}
+	return m.ExampleResults, nil
+}

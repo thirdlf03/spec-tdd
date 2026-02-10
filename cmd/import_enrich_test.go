@@ -82,7 +82,7 @@ func boolStr(b bool) string {
 }
 
 func TestImportKireEnrich(t *testing.T) {
-	t.Run("enrichment filters overview and nfr segments", func(t *testing.T) {
+	t.Run("enrichment processes FR and NFR, skips overview", func(t *testing.T) {
 		tmpDir := setupEnrichTestDir(t)
 
 		// Setup mock enricher
@@ -94,7 +94,11 @@ func TestImportKireEnrich(t *testing.T) {
 					{Given: "ユーザーが存在する", When: "正しいパスワードでログイン", Then: "認証トークンが返却される"},
 				},
 			},
-			{Category: enrich.CategoryNonFunctionalRequirement, Title: "非機能要件"},
+			{Category: enrich.CategoryNonFunctionalRequirement, Title: "非機能要件",
+				Examples: []spec.Example{
+					{Given: "システムが稼働中", When: "負荷テストを実行する", Then: "応答時間が基準以内"},
+				},
+			},
 		}
 		testEnricher = &enrich.MockEnricher{
 			Result: results[0],
@@ -118,20 +122,20 @@ func TestImportKireEnrich(t *testing.T) {
 
 		output := buf.String()
 
-		// Only 1 functional requirement should be created
-		if !strings.Contains(output, "1 created") {
-			t.Errorf("expected '1 created' in output, got: %s", output)
+		// FR + NFR = 2 created
+		if !strings.Contains(output, "2 created") {
+			t.Errorf("expected '2 created' in output, got: %s", output)
 		}
 
-		// Enrichment summary
-		if !strings.Contains(output, "1 enriched") {
-			t.Errorf("expected '1 enriched' in output, got: %s", output)
+		// Enrichment summary: 2 enriched (FR + NFR), 1 skipped (overview)
+		if !strings.Contains(output, "2 enriched") {
+			t.Errorf("expected '2 enriched' in output, got: %s", output)
 		}
-		if !strings.Contains(output, "2 skipped") {
-			t.Errorf("expected '2 skipped' in output, got: %s", output)
+		if !strings.Contains(output, "1 skipped") {
+			t.Errorf("expected '1 skipped' in output, got: %s", output)
 		}
 
-		// Verify the created spec
+		// Verify FR spec
 		specDir := filepath.Join(tmpDir, ".tdd", "specs")
 		s, err := spec.Load(filepath.Join(specDir, "REQ-001.yml"))
 		if err != nil {
@@ -142,6 +146,18 @@ func TestImportKireEnrich(t *testing.T) {
 		}
 		if len(s.Examples) != 1 {
 			t.Errorf("Examples count = %d, want 1", len(s.Examples))
+		}
+
+		// Verify NFR spec (auto-assigned REQ-002)
+		s2, err := spec.Load(filepath.Join(specDir, "REQ-002.yml"))
+		if err != nil {
+			t.Fatalf("Load REQ-002 (NFR) error: %v", err)
+		}
+		if s2.Title != "非機能要件" {
+			t.Errorf("NFR Title = %q", s2.Title)
+		}
+		if len(s2.Examples) != 1 {
+			t.Errorf("NFR Examples count = %d, want 1", len(s2.Examples))
 		}
 	})
 

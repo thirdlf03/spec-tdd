@@ -1,6 +1,8 @@
 package enrich
 
 import (
+	"errors"
+
 	"github.com/thirdlf03/spec-tdd/internal/spec"
 )
 
@@ -48,3 +50,30 @@ type EnrichResult struct {
 func (r *EnrichResult) IsRequirement() bool {
 	return r.Category == CategoryFunctionalRequirement
 }
+
+// IsExampleTarget は Example 生成対象かどうかを返す（FR + NFR）。
+func (c SegmentCategory) IsExampleTarget() bool {
+	return c == CategoryFunctionalRequirement || c == CategoryNonFunctionalRequirement
+}
+
+// IsExampleTarget は Example 生成対象かどうかを返す（FR + NFR）。
+func (r *EnrichResult) IsExampleTarget() bool {
+	return r.Category.IsExampleTarget()
+}
+
+// BatchClassifyResult はバッチ分類の1セグメント分の結果。
+type BatchClassifyResult struct {
+	SegmentID string          `json:"segment_id"`
+	Category  SegmentCategory `json:"category"`
+	Title     string          `json:"title"`
+	ReqID     string          `json:"req_id"`
+}
+
+// BatchExampleResult はバッチ Example 生成の1セグメント分の結果。
+type BatchExampleResult struct {
+	SegmentID string         `json:"segment_id"`
+	Examples  []spec.Example `json:"examples"`
+}
+
+// ErrBatchTruncated はバッチレスポンスが切断された場合のエラー。
+var ErrBatchTruncated = errors.New("batch response was truncated")
