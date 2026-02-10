@@ -1,14 +1,17 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/thirdlf03/spec-tdd/internal/enrich"
 	"github.com/thirdlf03/spec-tdd/internal/kire"
 	"github.com/thirdlf03/spec-tdd/internal/spec"
 )
@@ -24,6 +27,10 @@ var importKireCmd = &cobra.Command{
 	RunE:  runImportKire,
 }
 
+// testEnricher はテスト用に Enricher を差し替えるための変数。
+// nil の場合は実際の GeminiEnricher を使用する。
+var testEnricher enrich.Enricher
+
 func init() {
 	rootCmd.AddCommand(importCmd)
 	importCmd.AddCommand(importKireCmd)
@@ -32,6 +39,9 @@ func init() {
 	importKireCmd.Flags().String("jsonl", ".kire/metadata.jsonl", "Path to kire JSONL metadata file")
 	importKireCmd.Flags().Bool("force", false, "Overwrite existing spec files")
 	importKireCmd.Flags().Bool("dry-run", false, "Preview without writing files")
+	importKireCmd.Flags().Bool("enrich", false, "Enable LLM enrichment (requires GEMINI_API_KEY)")
+	importKireCmd.Flags().String("enrich-model", "gemini-2.5-flash-lite", "Gemini model name for enrichment")
+	importKireCmd.Flags().Duration("enrich-timeout", 30*time.Second, "Timeout for each Gemini API call")
 }
 
 var batchReqIDPattern = regexp.MustCompile(`REQ-(\d{3})`)
@@ -53,6 +63,31 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 	jsonlPath, _ := cmd.Flags().GetString("jsonl")
 	force, _ := cmd.Flags().GetBool("force")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	enrichEnabled, _ := cmd.Flags().GetBool("enrich")
+	enrichModel, _ := cmd.Flags().GetString("enrich-model")
+	enrichTimeout, _ := cmd.Flags().GetDuration("enrich-timeout")
+
+	// Initialize enricher if --enrich is enabled
+	var enricher enrich.Enricher
+	if enrichEnabled {
+		if testEnricher != nil {
+			enricher = testEnricher
+		} else {
+			apiKey := os.Getenv("GEMINI_API_KEY")
+			if apiKey == "" {
+				return fmt.Errorf("GEMINI_API_KEY is required when --enrich is enabled. Set it with: export GEMINI_API_KEY=your-key")
+			}
+			e, err := enrich.NewGeminiEnricher(enrich.GeminiEnricherConfig{
+				APIKey:  apiKey,
+				Model:   enrichModel,
+				Timeout: enrichTimeout,
+			})
+			if err != nil {
+				return err
+			}
+			enricher = e
+		}
+	}
 
 	metas, err := kire.ParseJSONL(jsonlPath)
 	if err != nil {
@@ -86,9 +121,10 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Phase 2: Assign IDs deterministically from batch content only
+	// Phase 2: Assign IDs deterministically
 	autoNext := maxExplicit
 	var entries []importEntry
+	var enrichedCount, skippedEnrich, errorsEnrich int
 
 	for i, seg := range segments {
 		if seg == nil {
@@ -97,41 +133,103 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		title := ""
-		if len(seg.Meta.HeadingPath) > 0 {
-			title = seg.Meta.HeadingPath[len(seg.Meta.HeadingPath)-1]
-		}
-		if title == "" {
-			title = extractFirstHeading(seg.Content)
-		}
+		if enrichEnabled && enricher != nil {
+			// Enrichment pipeline
+			fmt.Fprintf(cmd.OutOrStdout(), "enriching: %s ... ", seg.Meta.SegmentID)
 
-		id := kire.ExtractReqID(seg.Content)
-		if id == "" {
-			autoNext++
-			id = fmt.Sprintf("REQ-%03d", autoNext)
+			result, err := enricher.Enrich(context.Background(), seg)
+			if err != nil {
+				// Fallback to existing logic
+				log.Warn("enrichment failed, falling back to regex extraction", "segment_id", seg.Meta.SegmentID, "error", err)
+				fmt.Fprintf(cmd.OutOrStdout(), "error (fallback)\n")
+				errorsEnrich++
+				entry := buildEntryFromRegex(seg, &autoNext)
+				entries = append(entries, entry)
+				continue
+			}
+
+			if !result.IsRequirement() {
+				fmt.Fprintf(cmd.OutOrStdout(), "skipped (%s)\n", result.Category)
+				skippedEnrich++
+				continue
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "done\n")
+			enrichedCount++
+
+			// Use enrichment result
+			id := result.ReqID
+			if id == "" {
+				// Check regex extraction too
+				if regexID, regexTitle := kire.ExtractReqIDWithTitle(seg.Content); regexID != "" {
+					id = regexID
+					if result.Title == "" {
+						result.Title = regexTitle
+					}
+				}
+			}
+			if id == "" {
+				autoNext++
+				id = fmt.Sprintf("REQ-%03d", autoNext)
+			} else {
+				// Track explicit ID
+				if m := batchReqIDPattern.FindStringSubmatch(id); len(m) == 2 {
+					n, _ := strconv.Atoi(m[1])
+					if n > maxExplicit {
+						maxExplicit = n
+						autoNext = maxExplicit
+					}
+				}
+			}
+
+			title := result.Title
+			if title == "" && len(seg.Meta.HeadingPath) > 0 {
+				title = seg.Meta.HeadingPath[len(seg.Meta.HeadingPath)-1]
+			}
+			if title == "" {
+				title = extractFirstHeading(seg.Content)
+			}
+			if strings.TrimSpace(title) == "" {
+				return fmt.Errorf("empty title for segment %s after enrichment", seg.Meta.SegmentID)
+			}
+
+			// Merge examples: existing GWT > enriched GWT
+			existingExamples := kire.ExtractExamples(seg.Content)
+			examples := enrich.MergeExamples(existingExamples, result.Examples)
+
+			questions := kire.ExtractQuestions(seg.Content)
+
+			headingPath := make([]string, len(seg.Meta.HeadingPath))
+			copy(headingPath, seg.Meta.HeadingPath)
+
+			s := &spec.Spec{
+				ID:        id,
+				Title:     title,
+				Examples:  examples,
+				Questions: questions,
+				Source: spec.SourceInfo{
+					SegmentID:   seg.Meta.SegmentID,
+					HeadingPath: headingPath,
+				},
+			}
+
+			entries = append(entries, importEntry{seg: seg, spec: s})
+		} else {
+			// Existing logic (no enrichment)
+			entry := buildEntryFromRegex(seg, &autoNext)
+			entries = append(entries, entry)
 		}
+	}
 
-		examples := kire.ExtractExamples(seg.Content)
-		for j := range examples {
-			examples[j].ID = fmt.Sprintf("E%d", j+1)
+	// Check for duplicate REQ-IDs
+	if enrichEnabled {
+		var ids []string
+		for _, entry := range entries {
+			ids = append(ids, entry.spec.ID)
 		}
-		questions := kire.ExtractQuestions(seg.Content)
-
-		headingPath := make([]string, len(seg.Meta.HeadingPath))
-		copy(headingPath, seg.Meta.HeadingPath)
-
-		s := &spec.Spec{
-			ID:        id,
-			Title:     title,
-			Examples:  examples,
-			Questions: questions,
-			Source: spec.SourceInfo{
-				SegmentID:   seg.Meta.SegmentID,
-				HeadingPath: headingPath,
-			},
+		if err := kire.CheckDuplicateReqIDs(ids); err != nil {
+			return err
 		}
-
-		entries = append(entries, importEntry{seg: seg, spec: s})
 	}
 
 	// Phase 3: Save specs
@@ -173,7 +271,50 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "\n%d created, %d skipped, %d overwritten\n", created, skipped, overwritten)
 	}
 
+	if enrichEnabled && !dryRun {
+		fmt.Fprintf(cmd.OutOrStdout(), "%d enriched, %d skipped, %d errors\n", enrichedCount, skippedEnrich, errorsEnrich)
+	}
+
 	return nil
+}
+
+// buildEntryFromRegex は既存のロジック（正規表現ベース）でセグメントを変換する。
+func buildEntryFromRegex(seg *kire.Segment, autoNext *int) importEntry {
+	title := ""
+	if len(seg.Meta.HeadingPath) > 0 {
+		title = seg.Meta.HeadingPath[len(seg.Meta.HeadingPath)-1]
+	}
+	if title == "" {
+		title = extractFirstHeading(seg.Content)
+	}
+
+	id := kire.ExtractReqID(seg.Content)
+	if id == "" {
+		*autoNext++
+		id = fmt.Sprintf("REQ-%03d", *autoNext)
+	}
+
+	examples := kire.ExtractExamples(seg.Content)
+	for j := range examples {
+		examples[j].ID = fmt.Sprintf("E%d", j+1)
+	}
+	questions := kire.ExtractQuestions(seg.Content)
+
+	headingPath := make([]string, len(seg.Meta.HeadingPath))
+	copy(headingPath, seg.Meta.HeadingPath)
+
+	s := &spec.Spec{
+		ID:        id,
+		Title:     title,
+		Examples:  examples,
+		Questions: questions,
+		Source: spec.SourceInfo{
+			SegmentID:   seg.Meta.SegmentID,
+			HeadingPath: headingPath,
+		},
+	}
+
+	return importEntry{seg: seg, spec: s}
 }
 
 // extractFirstHeading returns the text of the first Markdown heading in content.
