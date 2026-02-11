@@ -77,7 +77,7 @@ func TestGuideCmd_GeneratesFile(t *testing.T) {
 	}
 }
 
-func TestGuideCmd_CycleError(t *testing.T) {
+func TestGuideCmd_CycleWarning(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	tddDir := filepath.Join(tmpDir, ".tdd")
@@ -111,13 +111,32 @@ func TestGuideCmd_CycleError(t *testing.T) {
 		}
 	}()
 
-	var buf bytes.Buffer
-	rootCmd.SetOut(&buf)
-	rootCmd.SetErr(&buf)
+	var stdout, stderr bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&stderr)
 	rootCmd.SetArgs([]string{"guide"})
 	err := rootCmd.Execute()
-	if err == nil {
-		t.Fatal("expected error for cycle, got nil")
+	if err != nil {
+		t.Fatalf("expected no error for cycle, got: %v", err)
+	}
+
+	// Guide file should be generated
+	if !strings.Contains(stdout.String(), "wrote .tdd/GUIDE.md") {
+		t.Errorf("expected 'wrote .tdd/GUIDE.md', got:\n%s", stdout.String())
+	}
+
+	// Warning should be on stderr
+	if !strings.Contains(stderr.String(), "warning") {
+		t.Errorf("expected cycle warning on stderr, got:\n%s", stderr.String())
+	}
+
+	// Guide content should contain Warnings section
+	data, err := os.ReadFile(filepath.Join(tmpDir, ".tdd", "GUIDE.md"))
+	if err != nil {
+		t.Fatalf("ReadFile error: %v", err)
+	}
+	if !strings.Contains(string(data), "## Warnings") {
+		t.Errorf("expected Warnings section in guide, got:\n%s", string(data))
 	}
 }
 

@@ -41,23 +41,25 @@ func runGuide(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Validate dependency graph (error, not warning)
-	if err := spec.ValidateDependsGraph(specs); err != nil {
-		return fmt.Errorf("dependency graph validation failed: %w", err)
+	// Validate dependency references exist (not cycles)
+	if err := spec.ValidateDependsRefs(specs); err != nil {
+		return fmt.Errorf("dependency validation failed: %w", err)
 	}
 
-	order, err := guide.TopologicalSort(specs)
-	if err != nil {
-		return err
+	sortResult := guide.TopologicalSort(specs)
+
+	for _, w := range sortResult.Warnings {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w)
 	}
 
 	depBy := guide.BuildDependedByMap(specs)
 
 	data := guide.GuideData{
 		Specs:         specs,
-		Order:         order,
+		Order:         sortResult.Order,
 		Prerequisites: make(map[string][]string, len(specs)),
 		DependedBy:    depBy,
+		Warnings:      sortResult.Warnings,
 	}
 	for _, s := range specs {
 		data.Prerequisites[s.ID] = s.Depends

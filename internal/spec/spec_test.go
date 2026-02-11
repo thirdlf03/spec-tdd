@@ -196,6 +196,41 @@ func TestValidate_Depends(t *testing.T) {
 	}
 }
 
+func TestValidateDependsRefs(t *testing.T) {
+	t.Run("valid references", func(t *testing.T) {
+		specs := []*Spec{
+			{ID: "REQ-001", Title: "A"},
+			{ID: "REQ-002", Title: "B", Depends: []string{"REQ-001"}},
+		}
+		if err := ValidateDependsRefs(specs); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("missing reference", func(t *testing.T) {
+		specs := []*Spec{
+			{ID: "REQ-001", Title: "A", Depends: []string{"REQ-999"}},
+		}
+		err := ValidateDependsRefs(specs)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !searchString(err.Error(), "does not exist") {
+			t.Fatalf("expected 'does not exist' error, got %q", err.Error())
+		}
+	})
+
+	t.Run("cycle is not an error", func(t *testing.T) {
+		specs := []*Spec{
+			{ID: "REQ-001", Title: "A", Depends: []string{"REQ-002"}},
+			{ID: "REQ-002", Title: "B", Depends: []string{"REQ-001"}},
+		}
+		if err := ValidateDependsRefs(specs); err != nil {
+			t.Fatalf("ValidateDependsRefs should not detect cycles, got: %v", err)
+		}
+	})
+}
+
 func TestValidateDependsGraph(t *testing.T) {
 	t.Run("valid DAG", func(t *testing.T) {
 		specs := []*Spec{

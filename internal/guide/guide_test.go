@@ -14,17 +14,17 @@ func TestTopologicalSort_Linear(t *testing.T) {
 		{ID: "REQ-002", Title: "B", Depends: []string{"REQ-001"}},
 	}
 
-	order, err := TopologicalSort(specs)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	result := TopologicalSort(specs)
 
-	if len(order) != 3 {
-		t.Fatalf("expected 3 items, got %d", len(order))
+	if len(result.Warnings) != 0 {
+		t.Fatalf("expected no warnings, got %v", result.Warnings)
 	}
-	if order[0].ID != "REQ-001" || order[1].ID != "REQ-002" || order[2].ID != "REQ-003" {
+	if len(result.Order) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(result.Order))
+	}
+	if result.Order[0].ID != "REQ-001" || result.Order[1].ID != "REQ-002" || result.Order[2].ID != "REQ-003" {
 		t.Fatalf("expected [REQ-001, REQ-002, REQ-003], got [%s, %s, %s]",
-			order[0].ID, order[1].ID, order[2].ID)
+			result.Order[0].ID, result.Order[1].ID, result.Order[2].ID)
 	}
 }
 
@@ -39,19 +39,19 @@ func TestTopologicalSort_Diamond(t *testing.T) {
 		{ID: "REQ-004", Title: "D", Depends: []string{"REQ-002", "REQ-003"}},
 	}
 
-	order, err := TopologicalSort(specs)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	result := TopologicalSort(specs)
 
-	if len(order) != 4 {
-		t.Fatalf("expected 4 items, got %d", len(order))
+	if len(result.Warnings) != 0 {
+		t.Fatalf("expected no warnings, got %v", result.Warnings)
 	}
-	if order[0].ID != "REQ-001" {
-		t.Fatalf("expected REQ-001 first, got %s", order[0].ID)
+	if len(result.Order) != 4 {
+		t.Fatalf("expected 4 items, got %d", len(result.Order))
 	}
-	if order[3].ID != "REQ-004" {
-		t.Fatalf("expected REQ-004 last, got %s", order[3].ID)
+	if result.Order[0].ID != "REQ-001" {
+		t.Fatalf("expected REQ-001 first, got %s", result.Order[0].ID)
+	}
+	if result.Order[3].ID != "REQ-004" {
+		t.Fatalf("expected REQ-004 last, got %s", result.Order[3].ID)
 	}
 }
 
@@ -62,15 +62,12 @@ func TestTopologicalSort_AllIndependent(t *testing.T) {
 		{ID: "REQ-002", Title: "B"},
 	}
 
-	order, err := TopologicalSort(specs)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	result := TopologicalSort(specs)
 
 	// Should be sorted by REQ-ID number
-	if order[0].ID != "REQ-001" || order[1].ID != "REQ-002" || order[2].ID != "REQ-003" {
+	if result.Order[0].ID != "REQ-001" || result.Order[1].ID != "REQ-002" || result.Order[2].ID != "REQ-003" {
 		t.Fatalf("expected numeric order, got [%s, %s, %s]",
-			order[0].ID, order[1].ID, order[2].ID)
+			result.Order[0].ID, result.Order[1].ID, result.Order[2].ID)
 	}
 }
 
@@ -80,12 +77,48 @@ func TestTopologicalSort_Cycle(t *testing.T) {
 		{ID: "REQ-002", Title: "B", Depends: []string{"REQ-001"}},
 	}
 
-	_, err := TopologicalSort(specs)
-	if err == nil {
-		t.Fatal("expected error for cycle, got nil")
+	result := TopologicalSort(specs)
+
+	if len(result.Order) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(result.Order))
 	}
-	if !strings.Contains(err.Error(), "cycle") {
-		t.Fatalf("expected cycle error, got: %v", err)
+	if len(result.Warnings) == 0 {
+		t.Fatal("expected warnings for cycle, got none")
+	}
+	if !strings.Contains(result.Warnings[0], "cycle") {
+		t.Fatalf("expected cycle warning, got: %s", result.Warnings[0])
+	}
+}
+
+func TestTopologicalSort_CycleWithNonCycleNodes(t *testing.T) {
+	// REQ-001 (root) -> REQ-002 -> REQ-003 (cycle with REQ-004)
+	//                            -> REQ-004 -> REQ-003
+	specs := []*spec.Spec{
+		{ID: "REQ-001", Title: "A"},
+		{ID: "REQ-002", Title: "B", Depends: []string{"REQ-001"}},
+		{ID: "REQ-003", Title: "C", Depends: []string{"REQ-002", "REQ-004"}},
+		{ID: "REQ-004", Title: "D", Depends: []string{"REQ-003"}},
+	}
+
+	result := TopologicalSort(specs)
+
+	if len(result.Order) != 4 {
+		t.Fatalf("expected 4 items, got %d", len(result.Order))
+	}
+	// Non-cycle nodes should come first in correct order
+	if result.Order[0].ID != "REQ-001" {
+		t.Fatalf("expected REQ-001 first, got %s", result.Order[0].ID)
+	}
+	if result.Order[1].ID != "REQ-002" {
+		t.Fatalf("expected REQ-002 second, got %s", result.Order[1].ID)
+	}
+	// Cyclic nodes should be appended after
+	if result.Order[2].ID != "REQ-003" || result.Order[3].ID != "REQ-004" {
+		t.Fatalf("expected cyclic nodes [REQ-003, REQ-004] at end, got [%s, %s]",
+			result.Order[2].ID, result.Order[3].ID)
+	}
+	if len(result.Warnings) == 0 {
+		t.Fatal("expected warnings for cycle, got none")
 	}
 }
 
@@ -116,16 +149,12 @@ func TestRenderGuide(t *testing.T) {
 		}},
 	}
 
-	order, err := TopologicalSort(specs)
-	if err != nil {
-		t.Fatalf("TopologicalSort error: %v", err)
-	}
-
+	result := TopologicalSort(specs)
 	depBy := BuildDependedByMap(specs)
 
 	data := GuideData{
 		Specs:         specs,
-		Order:         order,
+		Order:         result.Order,
 		Prerequisites: make(map[string][]string),
 		DependedBy:    depBy,
 	}
@@ -160,6 +189,11 @@ func TestRenderGuide(t *testing.T) {
 			t.Errorf("expected %s (%q) in guide, got:\n%s", c.label, c.content, guide)
 		}
 	}
+
+	// No warnings section when no cycles
+	if strings.Contains(guide, "## Warnings") {
+		t.Errorf("expected no Warnings section, got:\n%s", guide)
+	}
 }
 
 func TestRenderGuide_NoDeps(t *testing.T) {
@@ -167,10 +201,10 @@ func TestRenderGuide_NoDeps(t *testing.T) {
 		{ID: "REQ-001", Title: "Feature A"},
 	}
 
-	order, _ := TopologicalSort(specs)
+	result := TopologicalSort(specs)
 	data := GuideData{
 		Specs:         specs,
-		Order:         order,
+		Order:         result.Order,
 		Prerequisites: make(map[string][]string),
 		DependedBy:    BuildDependedByMap(specs),
 	}
@@ -179,5 +213,35 @@ func TestRenderGuide_NoDeps(t *testing.T) {
 
 	if !strings.Contains(guide, "No dependencies detected") {
 		t.Errorf("expected 'No dependencies detected', got:\n%s", guide)
+	}
+}
+
+func TestRenderGuide_WithWarnings(t *testing.T) {
+	specs := []*spec.Spec{
+		{ID: "REQ-001", Title: "A", Depends: []string{"REQ-002"}},
+		{ID: "REQ-002", Title: "B", Depends: []string{"REQ-001"}},
+	}
+
+	result := TopologicalSort(specs)
+	depBy := BuildDependedByMap(specs)
+
+	data := GuideData{
+		Specs:         specs,
+		Order:         result.Order,
+		Prerequisites: make(map[string][]string),
+		DependedBy:    depBy,
+		Warnings:      result.Warnings,
+	}
+	for _, s := range specs {
+		data.Prerequisites[s.ID] = s.Depends
+	}
+
+	guide := RenderGuide(data, "tests", "req-{{id}}-{{slug}}.test.ts")
+
+	if !strings.Contains(guide, "## Warnings") {
+		t.Errorf("expected Warnings section in guide, got:\n%s", guide)
+	}
+	if !strings.Contains(guide, "cycle") {
+		t.Errorf("expected cycle info in warnings, got:\n%s", guide)
 	}
 }

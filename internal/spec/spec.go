@@ -84,22 +84,30 @@ func (s *Spec) Validate() error {
 	return nil
 }
 
-// ValidateDependsGraph checks the dependency graph across all specs for
-// missing references and cycles. Uses DFS 3-color (white/gray/black).
-func ValidateDependsGraph(specs []*Spec) error {
+// ValidateDependsRefs checks that all referenced dependencies exist.
+// Unlike ValidateDependsGraph, it does not check for cycles.
+func ValidateDependsRefs(specs []*Spec) error {
 	ids := make(map[string]bool, len(specs))
 	for _, s := range specs {
 		ids[s.ID] = true
 	}
 
-	// Check that all referenced dependencies exist
 	for _, s := range specs {
 		for _, dep := range s.Depends {
 			if !ids[dep] {
-				return apperrors.New("spec.ValidateDependsGraph", apperrors.ErrInvalidInput,
+				return apperrors.New("spec.ValidateDependsRefs", apperrors.ErrInvalidInput,
 					fmt.Sprintf("%s depends on %s which does not exist", s.ID, dep))
 			}
 		}
+	}
+	return nil
+}
+
+// ValidateDependsGraph checks the dependency graph across all specs for
+// missing references and cycles. Uses DFS 3-color (white/gray/black).
+func ValidateDependsGraph(specs []*Spec) error {
+	if err := ValidateDependsRefs(specs); err != nil {
+		return err
 	}
 
 	// Build adjacency list

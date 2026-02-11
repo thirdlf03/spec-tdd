@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/thirdlf03/spec-tdd/internal/apperrors"
 	"github.com/thirdlf03/spec-tdd/internal/scaffold"
 	"github.com/thirdlf03/spec-tdd/internal/spec"
 )
@@ -15,12 +14,20 @@ type GuideData struct {
 	Order         []*spec.Spec
 	Prerequisites map[string][]string // ID -> direct dependencies
 	DependedBy    map[string][]string // ID -> reverse dependencies
+	Warnings      []string
+}
+
+// TopologicalSortResult holds sorted specs and any cycle warnings.
+type TopologicalSortResult struct {
+	Order    []*spec.Spec
+	Warnings []string
 }
 
 // TopologicalSort returns specs in dependency order using Kahn's algorithm.
 // Specs at the same level are sorted by REQ-ID numerically.
-// Returns an error if a cycle is detected.
-func TopologicalSort(specs []*spec.Spec) ([]*spec.Spec, error) {
+// If a cycle is detected, the cyclic nodes are appended as a same-layer group
+// and a warning is returned instead of an error.
+func TopologicalSort(specs []*spec.Spec) TopologicalSortResult {
 	specMap := make(map[string]*spec.Spec, len(specs))
 	inDegree := make(map[string]int, len(specs))
 	adj := make(map[string][]string, len(specs))
@@ -47,6 +54,7 @@ func TopologicalSort(specs []*spec.Spec) ([]*spec.Spec, error) {
 		}
 	}
 
+	processed := make(map[string]bool, len(specs))
 	var result []*spec.Spec
 	for len(queue) > 0 {
 		// Sort queue for deterministic order (by REQ-ID number)
@@ -55,6 +63,7 @@ func TopologicalSort(specs []*spec.Spec) ([]*spec.Spec, error) {
 		id := queue[0]
 		queue = queue[1:]
 		result = append(result, specMap[id])
+		processed[id] = true
 
 		for _, next := range adj[id] {
 			inDegree[next]--
@@ -64,12 +73,27 @@ func TopologicalSort(specs []*spec.Spec) ([]*spec.Spec, error) {
 		}
 	}
 
+	var warnings []string
 	if len(result) != len(specs) {
-		return nil, apperrors.New("guide.TopologicalSort", apperrors.ErrInvalidInput,
-			"dependency cycle detected, cannot determine implementation order")
+		// Collect remaining (cyclic) nodes
+		var cycleIDs []string
+		for _, s := range specs {
+			if !processed[s.ID] {
+				cycleIDs = append(cycleIDs, s.ID)
+			}
+		}
+		sortQueue(cycleIDs)
+
+		warnings = append(warnings, fmt.Sprintf(
+			"dependency cycle detected: %s — treated as same layer",
+			strings.Join(cycleIDs, ", ")))
+
+		for _, id := range cycleIDs {
+			result = append(result, specMap[id])
+		}
 	}
 
-	return result, nil
+	return TopologicalSortResult{Order: result, Warnings: warnings}
 }
 
 // BuildDependedByMap builds a reverse dependency map.
@@ -97,6 +121,15 @@ func RenderGuide(data GuideData, testDir, fileNamePattern string) string {
 	// Overview
 	sb.WriteString("# Implementation Guide\n\n")
 	sb.WriteString(fmt.Sprintf("Total requirements: %d\n\n", len(data.Specs)))
+
+	// Warnings
+	if len(data.Warnings) > 0 {
+		sb.WriteString("## Warnings\n\n")
+		for _, w := range data.Warnings {
+			sb.WriteString(fmt.Sprintf("- %s\n", w))
+		}
+		sb.WriteString("\n")
+	}
 
 	// Prerequisites summary
 	sb.WriteString("## Prerequisites\n\n")
