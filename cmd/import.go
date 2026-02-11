@@ -188,12 +188,18 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 	var entries []importEntry
 	var enrichedCount, skippedEnrich, errorsEnrich int
 
+	// 1-pass モードのコンテキスト: ヒューリスティックで overview/other 候補を事前収集
+	var onePassContext []*kire.Segment
+	if enrichEnabled && enricher != nil {
+		onePassContext = collectHeuristicContext(validSegments)
+	}
+
 	for _, seg := range validSegments {
 		if enrichEnabled && enricher != nil {
 			// Enrichment pipeline
 			fmt.Fprintf(cmd.OutOrStdout(), "enriching: %s ... ", seg.Meta.SegmentID)
 
-			result, err := enricher.Enrich(context.Background(), seg)
+			result, err := enricher.Enrich(context.Background(), seg, onePassContext)
 			if err != nil {
 				// Fallback to existing logic
 				log.Warn("enrichment failed, falling back to regex extraction", "segment_id", seg.Meta.SegmentID, "error", err)
@@ -282,9 +288,12 @@ func runImportKire(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 同一 REQ-ID のエントリをマージ
+	// 同一 REQ-ID のエントリをマージ + 重複除去
 	if enrichEnabled {
 		entries = mergeEntriesByReqID(entries)
+		for i := range entries {
+			entries[i].spec.Examples = enrich.DeduplicateExamples(entries[i].spec.Examples)
+		}
 	}
 
 	if err := saveEntries(cmd, entries, cfg.SpecDir, force, dryRun); err != nil {
@@ -318,9 +327,10 @@ func runBatchEnrich(cmd *cobra.Command, log interface{ Warn(string, ...any) }, b
 		segMap[seg.Meta.SegmentID] = seg
 	}
 
-	// Filter example-target segments (FR + NFR) and assign IDs
+	// Filter example-target segments (FR + NFR) and collect context segments (overview)
 	autoNext := maxExplicit
 	var targetSegments []*kire.Segment
+	var contextSegments []*kire.Segment
 	var entries []importEntry
 	titleMap := make(map[string]string)   // segment_id -> title
 	idMap := make(map[string]string)      // segment_id -> REQ-ID
@@ -334,6 +344,10 @@ func runBatchEnrich(cmd *cobra.Command, log interface{ Warn(string, ...any) }, b
 
 		category := enrich.NormalizeCategory(string(cr.Category))
 		if !category.IsExampleTarget() {
+			// overview/other セグメントはコンテキストとして保持
+			if category == enrich.CategoryOverview || category == enrich.CategoryOther {
+				contextSegments = append(contextSegments, seg)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "  %s: skipped (%s)\n", cr.SegmentID, category)
 			skippedCount++
 			continue
@@ -382,13 +396,13 @@ func runBatchEnrich(cmd *cobra.Command, log interface{ Warn(string, ...any) }, b
 		titleMap[cr.SegmentID] = title
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  %d requirements (FR+NFR), %d skipped\n", len(targetSegments), skippedCount)
+	fmt.Fprintf(cmd.OutOrStdout(), "  %d requirements (FR+NFR), %d skipped, %d context\n", len(targetSegments), skippedCount, len(contextSegments))
 
-	// Call 2: BatchGenerateExamples for FR segments
+	// Call 2: BatchGenerateExamples for FR/NFR segments with overview context
 	exampleMap := make(map[string][]spec.Example)
 	if len(targetSegments) > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "generating examples for %d segments ... ", len(targetSegments))
-		exResults, err := batchGenerateWithFallback(context.Background(), be, targetSegments)
+		exResults, err := batchGenerateWithFallback(context.Background(), be, targetSegments, contextSegments)
 		if err != nil {
 			log.Warn("batch example generation failed", "error", err)
 			fmt.Fprintf(cmd.OutOrStdout(), "error\n")
@@ -429,36 +443,49 @@ func runBatchEnrich(cmd *cobra.Command, log interface{ Warn(string, ...any) }, b
 		entries = append(entries, importEntry{seg: seg, spec: s})
 	}
 
-	// 同一 REQ-ID のエントリをマージ
+	// 同一 REQ-ID のエントリをマージ + 重複除去
 	entries = mergeEntriesByReqID(entries)
+	for i := range entries {
+		entries[i].spec.Examples = enrich.DeduplicateExamples(entries[i].spec.Examples)
+	}
 
 	return entries, nil
 }
 
-const maxBatchSize = 10
+const maxBatchSize = 5
 
 // batchGenerateWithFallback は BatchGenerateExamples を呼び、
 // maxBatchSize 超過時またはトークン切断時に再帰的に分割する。
-func batchGenerateWithFallback(ctx context.Context, be enrich.BatchEnricher, targetSegments []*kire.Segment) ([]enrich.BatchExampleResult, error) {
+// contextSegments は全再帰呼び出しに同一スライスが渡される（分割対象外）。
+func batchGenerateWithFallback(ctx context.Context, be enrich.BatchEnricher, targetSegments []*kire.Segment, contextSegments []*kire.Segment) ([]enrich.BatchExampleResult, error) {
 	if len(targetSegments) <= maxBatchSize {
-		results, err := be.BatchGenerateExamples(ctx, targetSegments)
+		results, err := be.BatchGenerateExamples(ctx, targetSegments, contextSegments)
 		if err == nil {
 			return results, nil
 		}
-		if !errors.Is(err, enrich.ErrBatchTruncated) {
+		// 1件以下なら分割不可能なので諦め
+		if len(targetSegments) <= 1 {
+			if errors.Is(err, enrich.ErrBatchTruncated) {
+				return results, nil
+			}
 			return nil, err
 		}
-		// truncated: 1件以下なら諦め
-		if len(targetSegments) <= 1 {
-			return results, nil
+		// truncated またはタイムアウト系エラーの場合は分割にフォールバック
+		isSplittable := errors.Is(err, enrich.ErrBatchTruncated) ||
+			errors.Is(err, context.DeadlineExceeded) ||
+			strings.Contains(err.Error(), "DEADLINE_EXCEEDED") ||
+			strings.Contains(err.Error(), "504") ||
+			strings.Contains(err.Error(), "timed out")
+		if !isSplittable {
+			return nil, err
 		}
 		// fall through to split
 	}
 
-	// 分割して再帰
+	// 分割して再帰（contextSegments は分割しない）
 	mid := len(targetSegments) / 2
-	r1, err1 := batchGenerateWithFallback(ctx, be, targetSegments[:mid])
-	r2, err2 := batchGenerateWithFallback(ctx, be, targetSegments[mid:])
+	r1, err1 := batchGenerateWithFallback(ctx, be, targetSegments[:mid], contextSegments)
+	r2, err2 := batchGenerateWithFallback(ctx, be, targetSegments[mid:], contextSegments)
 
 	var combined []enrich.BatchExampleResult
 	if err1 == nil {
@@ -629,4 +656,36 @@ func extractFirstHeading(content string) string {
 		}
 	}
 	return ""
+}
+
+// contextHintKeywords はヒューリスティックで overview/other セグメントを判定するキーワード。
+// HeadingPath の各要素にこれらが含まれていればコンテキスト候補とみなす。
+var contextHintKeywords = []string{
+	"概要", "用語", "共通", "overview", "glossary", "common",
+	"はじめに", "前提", "背景", "introduction", "prerequisite",
+}
+
+// collectHeuristicContext はヒューリスティックで overview/other 候補のセグメントを収集する。
+// 1-pass モードで API コール数を増やさずにコンテキスト注入を可能にする。
+func collectHeuristicContext(segments []*kire.Segment) []*kire.Segment {
+	var result []*kire.Segment
+	for _, seg := range segments {
+		if isContextCandidate(seg) {
+			result = append(result, seg)
+		}
+	}
+	return result
+}
+
+// isContextCandidate はセグメントがコンテキスト候補かどうかをヒューリスティックで判定する。
+func isContextCandidate(seg *kire.Segment) bool {
+	for _, part := range seg.Meta.HeadingPath {
+		lower := strings.ToLower(part)
+		for _, kw := range contextHintKeywords {
+			if strings.Contains(lower, kw) {
+				return true
+			}
+		}
+	}
+	return false
 }

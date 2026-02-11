@@ -50,7 +50,7 @@ func NewGeminiBatchEnricher(cfg GeminiBatchEnricherConfig) (BatchEnricher, error
 		cfg.ClassifyTimeout = 60 * time.Second
 	}
 	if cfg.ExampleTimeout == 0 {
-		cfg.ExampleTimeout = 120 * time.Second
+		cfg.ExampleTimeout = 180 * time.Second
 	}
 	if cfg.MaxRetries == 0 {
 		cfg.MaxRetries = 2
@@ -65,10 +65,12 @@ func NewGeminiBatchEnricher(cfg GeminiBatchEnricherConfig) (BatchEnricher, error
 		return nil, apperrors.Wrap("enrich.NewGeminiBatchEnricher", err)
 	}
 
+	temp := float32(0)
 	gen := func(ctx context.Context, model string, prompt string, schema *genai.Schema) (string, *genai.GenerateContentResponse, error) {
 		result, err := client.Models.GenerateContent(ctx, model, genai.Text(prompt), &genai.GenerateContentConfig{
 			ResponseMIMEType: "application/json",
 			ResponseSchema:   schema,
+			Temperature:      &temp,
 		})
 		if err != nil {
 			return "", nil, err
@@ -140,8 +142,9 @@ func (e *GeminiBatchEnricher) BatchClassify(ctx context.Context, segments []*kir
 	return results, nil
 }
 
-// BatchGenerateExamples は FR セグメントのバッチ Example 生成を行う。
-func (e *GeminiBatchEnricher) BatchGenerateExamples(ctx context.Context, segments []*kire.Segment) ([]BatchExampleResult, error) {
+// BatchGenerateExamples は FR/NFR セグメントのバッチ Example 生成を行う。
+// contextSegments は参照用の共通仕様セグメント（overview 等）。nil 可。
+func (e *GeminiBatchEnricher) BatchGenerateExamples(ctx context.Context, segments []*kire.Segment, contextSegments []*kire.Segment) ([]BatchExampleResult, error) {
 	if len(segments) == 0 {
 		return nil, nil
 	}
@@ -154,7 +157,8 @@ func (e *GeminiBatchEnricher) BatchGenerateExamples(ctx context.Context, segment
 		}
 	}
 
-	prompt := fmt.Sprintf(batchExamplesPrompt, formatSegmentsForExamples(segments, titles))
+	contextSection := formatContextSection(contextSegments)
+	prompt := fmt.Sprintf(batchExamplesPrompt, contextSection, formatSegmentsForExamples(segments, titles))
 
 	var responseText string
 	var resp *genai.GenerateContentResponse

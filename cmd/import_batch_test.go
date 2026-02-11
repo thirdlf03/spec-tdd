@@ -135,6 +135,57 @@ func TestImportKireBatchEnrich(t *testing.T) {
 		if !strings.Contains(output, "0 created") {
 			t.Errorf("expected '0 created', got: %s", output)
 		}
+
+		// overview + other = 3 context segments
+		if !strings.Contains(output, "3 context") {
+			t.Errorf("expected '3 context' (overview + other), got: %s", output)
+		}
+	})
+
+	t.Run("other segments included in context", func(t *testing.T) {
+		tmpDir := setupEnrichTestDir(t)
+
+		testBatchEnricher = &enrich.MockBatchEnricher{
+			ClassifyResults: []enrich.BatchClassifyResult{
+				{SegmentID: "seg-0000", Category: enrich.CategoryOverview, Title: "概要"},
+				{SegmentID: "seg-0001", Category: enrich.CategoryFunctionalRequirement, Title: "ユーザーログイン", ReqID: "REQ-001"},
+				{SegmentID: "seg-0002", Category: enrich.CategoryOther, Title: "Unicode正規化"},
+			},
+			ExampleResults: []enrich.BatchExampleResult{
+				{SegmentID: "seg-0001", Examples: []spec.Example{
+					{Given: "ユーザーが存在する", When: "ログインする", Then: "トークン返却"},
+				}},
+			},
+		}
+		t.Cleanup(func() {
+			testBatchEnricher = nil
+		})
+
+		setBatchEnrichFlags(t, true, "test-example-model")
+
+		var buf bytes.Buffer
+		importKireCmd.SetOut(&buf)
+
+		if err := importKireCmd.RunE(importKireCmd, []string{}); err != nil {
+			t.Fatalf("importKireCmd error: %v", err)
+		}
+
+		output := buf.String()
+
+		// overview + other = 2 context
+		if !strings.Contains(output, "2 context") {
+			t.Errorf("expected '2 context' (overview + other), got: %s", output)
+		}
+
+		// FR segment should still be created
+		specDir := filepath.Join(tmpDir, ".tdd", "specs")
+		s, err := spec.Load(filepath.Join(specDir, "REQ-001.yml"))
+		if err != nil {
+			t.Fatalf("Load REQ-001 error: %v", err)
+		}
+		if s.Title != "ユーザーログイン" {
+			t.Errorf("Title = %q, want 'ユーザーログイン'", s.Title)
+		}
 	})
 
 	t.Run("batch mode auto-assigns REQ-IDs", func(t *testing.T) {
@@ -360,7 +411,7 @@ func TestBatchGenerateWithFallback(t *testing.T) {
 		}
 
 		segments := make([]*kire.Segment, 2)
-		results, err := batchGenerateWithFallback(context.TODO(), mock, segments)
+		results, err := batchGenerateWithFallback(context.TODO(), mock, segments, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -395,7 +446,7 @@ func TestBatchGenerateWithFallback(t *testing.T) {
 			segments[i] = &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg"}}
 		}
 
-		results, err := batchGenerateWithFallback(context.TODO(), mock, segments)
+		results, err := batchGenerateWithFallback(context.TODO(), mock, segments, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -432,7 +483,7 @@ func TestBatchGenerateWithFallback(t *testing.T) {
 			segments[i] = &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg"}}
 		}
 
-		results, err := batchGenerateWithFallback(context.TODO(), mock, segments)
+		results, err := batchGenerateWithFallback(context.TODO(), mock, segments, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -451,7 +502,7 @@ func TestBatchGenerateWithFallback(t *testing.T) {
 		}
 
 		segments := make([]*kire.Segment, 2)
-		_, err := batchGenerateWithFallback(context.TODO(), mock, segments)
+		_, err := batchGenerateWithFallback(context.TODO(), mock, segments, nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -471,7 +522,7 @@ func (m *splitRetryMockBatchEnricher) BatchClassify(_ context.Context, _ []*kire
 	return m.classifyResults, nil
 }
 
-func (m *splitRetryMockBatchEnricher) BatchGenerateExamples(_ context.Context, segs []*kire.Segment) ([]enrich.BatchExampleResult, error) {
+func (m *splitRetryMockBatchEnricher) BatchGenerateExamples(_ context.Context, segs []*kire.Segment, _ []*kire.Segment) ([]enrich.BatchExampleResult, error) {
 	return m.onExample(len(segs))
 }
 

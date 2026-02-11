@@ -2,6 +2,7 @@ package enrich
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,7 +71,7 @@ func TestGeminiEnricher_Enrich(t *testing.T) {
 			return `{"category":"functional_requirement","req_id":"REQ-001","title":"ユーザーログイン","examples":[{"given":"ユーザーが存在する","when":"正しいパスワードでログインする","then":"認証トークンが返却される"},{"given":"ユーザーが存在する","when":"間違ったパスワードでログインする","then":"エラーメッセージが表示される"}]}`, nil
 		})
 
-		result, err := e.Enrich(context.Background(), seg)
+		result, err := e.Enrich(context.Background(), seg, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -93,7 +94,7 @@ func TestGeminiEnricher_Enrich(t *testing.T) {
 			return `{"category":"overview","req_id":"","title":"プロジェクト概要","examples":[]}`, nil
 		})
 
-		result, err := e.Enrich(context.Background(), seg)
+		result, err := e.Enrich(context.Background(), seg, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -110,7 +111,7 @@ func TestGeminiEnricher_Enrich(t *testing.T) {
 			return `{"category":"unknown_type","req_id":"","title":"不明","examples":[]}`, nil
 		})
 
-		result, err := e.Enrich(context.Background(), seg)
+		result, err := e.Enrich(context.Background(), seg, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -124,7 +125,7 @@ func TestGeminiEnricher_Enrich(t *testing.T) {
 			return `{invalid json`, nil
 		})
 
-		_, err := e.Enrich(context.Background(), seg)
+		_, err := e.Enrich(context.Background(), seg, nil)
 		if err == nil {
 			t.Fatal("expected error for invalid JSON")
 		}
@@ -135,7 +136,7 @@ func TestGeminiEnricher_Enrich(t *testing.T) {
 			return `{"category":"functional_requirement","req_id":"","title":"テスト","examples":[{"given":"条件","when":"操作","then":"結果"},{"given":"","when":"操作","then":"結果"},{"given":"条件","when":"","then":"結果"}]}`, nil
 		})
 
-		result, err := e.Enrich(context.Background(), seg)
+		result, err := e.Enrich(context.Background(), seg, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -154,7 +155,7 @@ func TestGeminiEnricher_Enrich(t *testing.T) {
 			return `{"category":"functional_requirement","req_id":"","title":"テスト","examples":[]}`, nil
 		})
 
-		result, err := e.Enrich(context.Background(), seg)
+		result, err := e.Enrich(context.Background(), seg, nil)
 		if err != nil {
 			t.Fatalf("unexpected error after retries: %v", err)
 		}
@@ -171,7 +172,7 @@ func TestGeminiEnricher_Enrich(t *testing.T) {
 			return "", context.DeadlineExceeded
 		})
 
-		_, err := e.Enrich(context.Background(), seg)
+		_, err := e.Enrich(context.Background(), seg, nil)
 		if err == nil {
 			t.Fatal("expected error when all retries fail")
 		}
@@ -182,7 +183,7 @@ func TestGeminiEnricher_Enrich(t *testing.T) {
 			return `{"category":"functional_requirement","req_id":"REQ-001","title":"ログイン","examples":[{"given":"ユーザーが存在する","when":"ログインする","then":"成功する"}]}`, nil
 		})
 
-		result, err := e.Enrich(context.Background(), seg)
+		result, err := e.Enrich(context.Background(), seg, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -198,6 +199,48 @@ func TestGeminiEnricher_Enrich(t *testing.T) {
 		}
 		if ex.Then != "成功する" {
 			t.Errorf("Then = %q", ex.Then)
+		}
+	})
+
+	t.Run("context segments included in prompt", func(t *testing.T) {
+		var capturedPrompt string
+		e := newTestEnricher(func(_ context.Context, prompt string) (string, error) {
+			capturedPrompt = prompt
+			return `{"category":"functional_requirement","req_id":"","title":"テスト","examples":[]}`, nil
+		})
+
+		ctxSegs := []*kire.Segment{
+			{Meta: kire.SegmentMeta{SegmentID: "ctx-0001"}, Content: "# 共通仕様\nContent-Type text/plain は 415 を返す"},
+		}
+
+		_, err := e.Enrich(context.Background(), seg, ctxSegs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(capturedPrompt, "共通仕様（各セグメントへの適用必須") {
+			t.Error("prompt should contain context section header")
+		}
+		if !strings.Contains(capturedPrompt, "ctx-0001") {
+			t.Error("prompt should contain context segment ID")
+		}
+		if !strings.Contains(capturedPrompt, "415") {
+			t.Error("prompt should contain context segment content")
+		}
+	})
+
+	t.Run("nil context produces no context section in prompt", func(t *testing.T) {
+		var capturedPrompt string
+		e := newTestEnricher(func(_ context.Context, prompt string) (string, error) {
+			capturedPrompt = prompt
+			return `{"category":"functional_requirement","req_id":"","title":"テスト","examples":[]}`, nil
+		})
+
+		_, err := e.Enrich(context.Background(), seg, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if strings.Contains(capturedPrompt, "共通仕様（参照用") {
+			t.Error("prompt should not contain context section when contextSegments is nil")
 		}
 	})
 }

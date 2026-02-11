@@ -430,6 +430,72 @@ func TestImportKireEnrich(t *testing.T) {
 			t.Errorf("Examples[1].Given = %q, want 'GB'", s.Examples[1].Given)
 		}
 	})
+
+	t.Run("1-pass mode collects heuristic context", func(t *testing.T) {
+		tmpDir := setupEnrichTestDir(t)
+
+		// Override JSONL to have a segment with "概要" in heading path
+		kireDir := filepath.Join(tmpDir, ".kire")
+		jsonl := `{"content":"# 概要\n\nプロジェクトの概要。\n","metadata":{"source":"doc.md","segment_index":0,"filename":"00-overview.md","heading_path":["Doc","概要"],"token_count":50,"block_count":3}}
+{"content":"### REQ-001: ユーザーログイン\n\n正常系: ユーザーが存在する\n","metadata":{"source":"doc.md","segment_index":1,"filename":"01-login.md","heading_path":["Doc","認証","ログイン"],"token_count":80,"block_count":5}}
+{"content":"# 非機能要件\n\nレスポンスタイム1秒以内\n","metadata":{"source":"doc.md","segment_index":2,"filename":"02-nfr.md","heading_path":["Doc","非機能要件"],"token_count":40,"block_count":2}}`
+		if err := os.WriteFile(filepath.Join(kireDir, "metadata.jsonl"), []byte(jsonl), 0644); err != nil {
+			t.Fatalf("write jsonl error: %v", err)
+		}
+
+		var contextReceived [][]*kire.Segment
+		mock := &contextCaptureMockEnricher{
+			results: []*enrich.EnrichResult{
+				{Category: enrich.CategoryOverview, Title: "概要"},
+				{Category: enrich.CategoryFunctionalRequirement, ReqID: "REQ-001", Title: "ユーザーログイン",
+					Examples: []spec.Example{{Given: "ユーザーが存在する", When: "ログインする", Then: "成功"}}},
+				{Category: enrich.CategoryNonFunctionalRequirement, Title: "非機能要件",
+					Examples: []spec.Example{{Given: "システム稼働中", When: "負荷テスト", Then: "基準以内"}}},
+			},
+			onEnrich: func(ctx []*kire.Segment) {
+				contextReceived = append(contextReceived, ctx)
+			},
+		}
+		testEnricher = mock
+		t.Cleanup(func() { testEnricher = nil })
+
+		setEnrichFlags(t, true)
+
+		var buf bytes.Buffer
+		importKireCmd.SetOut(&buf)
+
+		if err := importKireCmd.RunE(importKireCmd, []string{}); err != nil {
+			t.Fatalf("importKireCmd error: %v", err)
+		}
+
+		// "概要" is in heading path → heuristic context should be collected
+		if len(contextReceived) == 0 {
+			t.Fatal("expected context to be passed to enricher")
+		}
+		// All calls should receive the same context
+		for i, ctx := range contextReceived {
+			if len(ctx) == 0 {
+				t.Errorf("call %d: expected non-empty context", i)
+			}
+		}
+		// Verify the context segment is the overview one
+		found := false
+		for _, seg := range contextReceived[0] {
+			if strings.Contains(seg.Content, "概要") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("expected context to contain overview segment")
+		}
+
+		// Should still produce specs
+		specDir := filepath.Join(tmpDir, ".tdd", "specs")
+		if _, err := spec.Load(filepath.Join(specDir, "REQ-001.yml")); err != nil {
+			t.Errorf("REQ-001 should exist: %v", err)
+		}
+	})
 }
 
 // sequentialMockEnricher returns results in order for each call.
@@ -438,7 +504,26 @@ type sequentialMockEnricher struct {
 	index   int
 }
 
-func (m *sequentialMockEnricher) Enrich(_ context.Context, _ *kire.Segment) (*enrich.EnrichResult, error) {
+func (m *sequentialMockEnricher) Enrich(_ context.Context, _ *kire.Segment, _ []*kire.Segment) (*enrich.EnrichResult, error) {
+	if m.index >= len(m.results) {
+		return &enrich.EnrichResult{Category: enrich.CategoryOther, Title: "unknown"}, nil
+	}
+	r := m.results[m.index]
+	m.index++
+	return r, nil
+}
+
+// contextCaptureMockEnricher はコンテキスト引数をキャプチャするモック。
+type contextCaptureMockEnricher struct {
+	results  []*enrich.EnrichResult
+	index    int
+	onEnrich func(ctx []*kire.Segment)
+}
+
+func (m *contextCaptureMockEnricher) Enrich(_ context.Context, _ *kire.Segment, ctx []*kire.Segment) (*enrich.EnrichResult, error) {
+	if m.onEnrich != nil {
+		m.onEnrich(ctx)
+	}
 	if m.index >= len(m.results) {
 		return &enrich.EnrichResult{Category: enrich.CategoryOther, Title: "unknown"}, nil
 	}

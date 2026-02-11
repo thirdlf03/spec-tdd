@@ -64,3 +64,89 @@ func TestMergeExamples(t *testing.T) {
 		}
 	})
 }
+
+func TestDeduplicateExamples(t *testing.T) {
+	t.Run("removes exact duplicates", func(t *testing.T) {
+		examples := []spec.Example{
+			{ID: "E1", Given: "条件A", When: "操作A", Then: "結果A"},
+			{ID: "E2", Given: "条件B", When: "操作B", Then: "結果B"},
+			{ID: "E3", Given: "条件A", When: "操作A", Then: "結果A"},
+		}
+
+		result := DeduplicateExamples(examples)
+		if len(result) != 2 {
+			t.Fatalf("expected 2 examples, got %d", len(result))
+		}
+		if result[0].Given != "条件A" {
+			t.Errorf("result[0].Given = %q, want '条件A'", result[0].Given)
+		}
+		if result[1].Given != "条件B" {
+			t.Errorf("result[1].Given = %q, want '条件B'", result[1].Given)
+		}
+		// IDs re-numbered
+		if result[0].ID != "E1" || result[1].ID != "E2" {
+			t.Errorf("IDs = [%s, %s], want [E1, E2]", result[0].ID, result[1].ID)
+		}
+	})
+
+	t.Run("removes duplicates with whitespace differences", func(t *testing.T) {
+		examples := []spec.Example{
+			{ID: "E1", Given: "条件A", When: "操作A", Then: "結果A"},
+			{ID: "E2", Given: "  条件A  ", When: " 操作A ", Then: " 結果A "},
+		}
+
+		result := DeduplicateExamples(examples)
+		if len(result) != 1 {
+			t.Fatalf("expected 1 example, got %d", len(result))
+		}
+		// First occurrence is kept (original, not trimmed)
+		if result[0].Given != "条件A" {
+			t.Errorf("result[0].Given = %q, want '条件A'", result[0].Given)
+		}
+	})
+
+	t.Run("removes duplicates with case differences", func(t *testing.T) {
+		examples := []spec.Example{
+			{ID: "E1", Given: "User exists", When: "POST /login", Then: "200 OK"},
+			{ID: "E2", Given: "user exists", When: "post /login", Then: "200 ok"},
+		}
+
+		result := DeduplicateExamples(examples)
+		if len(result) != 1 {
+			t.Fatalf("expected 1 example, got %d", len(result))
+		}
+	})
+
+	t.Run("no duplicates returns unchanged", func(t *testing.T) {
+		examples := []spec.Example{
+			{ID: "E1", Given: "条件A", When: "操作A", Then: "結果A"},
+			{ID: "E2", Given: "条件B", When: "操作B", Then: "結果B"},
+		}
+
+		result := DeduplicateExamples(examples)
+		if len(result) != 2 {
+			t.Fatalf("expected 2 examples, got %d", len(result))
+		}
+	})
+
+	t.Run("empty input returns nil", func(t *testing.T) {
+		result := DeduplicateExamples(nil)
+		if result != nil {
+			t.Errorf("expected nil, got %v", result)
+		}
+	})
+
+	t.Run("single example returns as-is", func(t *testing.T) {
+		examples := []spec.Example{
+			{ID: "E1", Given: "条件A", When: "操作A", Then: "結果A"},
+		}
+
+		result := DeduplicateExamples(examples)
+		if len(result) != 1 {
+			t.Fatalf("expected 1 example, got %d", len(result))
+		}
+		if result[0].ID != "E1" {
+			t.Errorf("ID = %q, want E1", result[0].ID)
+		}
+	})
+}

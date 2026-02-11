@@ -51,7 +51,7 @@ func TestMockBatchEnricher(t *testing.T) {
 			},
 		}
 
-		results, err := mock.BatchGenerateExamples(context.Background(), nil)
+		results, err := mock.BatchGenerateExamples(context.Background(), nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -68,7 +68,7 @@ func TestMockBatchEnricher(t *testing.T) {
 			ExampleErr: ErrBatchTruncated,
 		}
 
-		_, err := mock.BatchGenerateExamples(context.Background(), nil)
+		_, err := mock.BatchGenerateExamples(context.Background(), nil, nil)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -93,7 +93,7 @@ func TestMockEnricher(t *testing.T) {
 			Content: "# Login",
 		}
 
-		result, err := mock.Enrich(context.Background(), seg)
+		result, err := mock.Enrich(context.Background(), seg, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -121,7 +121,7 @@ func TestMockEnricher(t *testing.T) {
 			Content: "# Login",
 		}
 
-		_, err := mock.Enrich(context.Background(), seg)
+		_, err := mock.Enrich(context.Background(), seg, nil)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -135,8 +135,8 @@ func TestMockEnricher(t *testing.T) {
 		seg1 := &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg-0001"}, Content: "a"}
 		seg2 := &kire.Segment{Meta: kire.SegmentMeta{SegmentID: "seg-0002"}, Content: "b"}
 
-		_, _ = mock.Enrich(context.Background(), seg1)
-		_, _ = mock.Enrich(context.Background(), seg2)
+		_, _ = mock.Enrich(context.Background(), seg1, nil)
+		_, _ = mock.Enrich(context.Background(), seg2, nil)
 
 		if len(mock.CalledWith) != 2 {
 			t.Fatalf("CalledWith count = %d, want 2", len(mock.CalledWith))

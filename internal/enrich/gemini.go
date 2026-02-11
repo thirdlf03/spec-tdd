@@ -58,10 +58,12 @@ func NewGeminiEnricher(cfg GeminiEnricherConfig) (Enricher, error) {
 		return nil, apperrors.Wrap("enrich.NewGeminiEnricher", err)
 	}
 
+	temp := float32(0)
 	gen := func(ctx context.Context, prompt string) (string, error) {
 		result, err := client.Models.GenerateContent(ctx, cfg.Model, genai.Text(prompt), &genai.GenerateContentConfig{
 			ResponseMIMEType: "application/json",
 			ResponseSchema:   enrichResponseSchema,
+			Temperature:      &temp,
 		})
 		if err != nil {
 			return "", err
@@ -91,8 +93,9 @@ type enrichResponse struct {
 }
 
 // Enrich はセグメントを解析し、分類・メタデータ抽出・GWT 生成を行う。
-func (e *GeminiEnricher) Enrich(ctx context.Context, segment *kire.Segment) (*EnrichResult, error) {
-	prompt := fmt.Sprintf(classifyAndEnrichPrompt, segment.Content)
+func (e *GeminiEnricher) Enrich(ctx context.Context, segment *kire.Segment, contextSegments []*kire.Segment) (*EnrichResult, error) {
+	contextSection := formatContextSection(contextSegments)
+	prompt := fmt.Sprintf(classifyAndEnrichPrompt, contextSection, segment.Content)
 
 	var responseText string
 	var lastErr error

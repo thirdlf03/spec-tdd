@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,8 +62,8 @@ func TestNewGeminiBatchEnricher(t *testing.T) {
 		if ge.cfg.ClassifyTimeout != 60*time.Second {
 			t.Errorf("ClassifyTimeout = %v, want %v", ge.cfg.ClassifyTimeout, 60*time.Second)
 		}
-		if ge.cfg.ExampleTimeout != 120*time.Second {
-			t.Errorf("ExampleTimeout = %v, want %v", ge.cfg.ExampleTimeout, 120*time.Second)
+		if ge.cfg.ExampleTimeout != 180*time.Second {
+			t.Errorf("ExampleTimeout = %v, want %v", ge.cfg.ExampleTimeout, 180*time.Second)
 		}
 	})
 }
@@ -270,7 +271,7 @@ func TestGeminiBatchEnricher_BatchGenerateExamples(t *testing.T) {
 			}, nil
 		})
 
-		results, err := e.BatchGenerateExamples(context.Background(), segments)
+		results, err := e.BatchGenerateExamples(context.Background(), segments, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -321,7 +322,7 @@ func TestGeminiBatchEnricher_BatchGenerateExamples(t *testing.T) {
 			}, nil
 		})
 
-		results, err := e.BatchGenerateExamples(context.Background(), segments)
+		results, err := e.BatchGenerateExamples(context.Background(), segments, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -349,7 +350,7 @@ func TestGeminiBatchEnricher_BatchGenerateExamples(t *testing.T) {
 			}, nil
 		})
 
-		results, err := e.BatchGenerateExamples(context.Background(), segments)
+		results, err := e.BatchGenerateExamples(context.Background(), segments, nil)
 		if !errors.Is(err, ErrBatchTruncated) {
 			t.Errorf("expected ErrBatchTruncated, got %v", err)
 		}
@@ -360,12 +361,119 @@ func TestGeminiBatchEnricher_BatchGenerateExamples(t *testing.T) {
 
 	t.Run("empty segments returns nil", func(t *testing.T) {
 		e := newTestBatchEnricher(nil)
-		results, err := e.BatchGenerateExamples(context.Background(), nil)
+		results, err := e.BatchGenerateExamples(context.Background(), nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if results != nil {
 			t.Errorf("expected nil results, got %v", results)
+		}
+	})
+
+	t.Run("context segments included in prompt", func(t *testing.T) {
+		var capturedPrompt string
+		e := newTestBatchEnricher(func(_ context.Context, _, prompt string, _ *genai.Schema) (string, *genai.GenerateContentResponse, error) {
+			capturedPrompt = prompt
+			rawResults := []struct {
+				SegmentID string `json:"segment_id"`
+				Examples  []struct {
+					Given string `json:"given"`
+					When  string `json:"when"`
+					Then  string `json:"then"`
+				} `json:"examples"`
+			}{
+				{SegmentID: "seg-0001", Examples: nil},
+				{SegmentID: "seg-0002", Examples: nil},
+			}
+			b, _ := json.Marshal(rawResults)
+			return string(b), &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{FinishReason: genai.FinishReasonStop}},
+			}, nil
+		})
+
+		ctxSegs := []*kire.Segment{
+			{Meta: kire.SegmentMeta{SegmentID: "ctx-0001"}, Content: "# 共通仕様\nContent-Type text/plain は 415 を返す"},
+		}
+
+		_, err := e.BatchGenerateExamples(context.Background(), segments, ctxSegs)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(capturedPrompt, "共通仕様（各セグメントへの適用必須") {
+			t.Error("prompt should contain context section header")
+		}
+		if !strings.Contains(capturedPrompt, "ctx-0001") {
+			t.Error("prompt should contain context segment ID")
+		}
+		if !strings.Contains(capturedPrompt, "415") {
+			t.Error("prompt should contain context segment content")
+		}
+	})
+
+	t.Run("nil context produces no context section", func(t *testing.T) {
+		var capturedPrompt string
+		e := newTestBatchEnricher(func(_ context.Context, _, prompt string, _ *genai.Schema) (string, *genai.GenerateContentResponse, error) {
+			capturedPrompt = prompt
+			rawResults := []struct {
+				SegmentID string `json:"segment_id"`
+				Examples  []struct {
+					Given string `json:"given"`
+					When  string `json:"when"`
+					Then  string `json:"then"`
+				} `json:"examples"`
+			}{
+				{SegmentID: "seg-0001", Examples: nil},
+				{SegmentID: "seg-0002", Examples: nil},
+			}
+			b, _ := json.Marshal(rawResults)
+			return string(b), &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{FinishReason: genai.FinishReasonStop}},
+			}, nil
+		})
+
+		_, err := e.BatchGenerateExamples(context.Background(), segments, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if strings.Contains(capturedPrompt, "共通仕様（参照用") {
+			t.Error("prompt should not contain context section when contextSegments is nil")
+		}
+	})
+}
+
+func TestFormatSegmentsWithContext(t *testing.T) {
+	t.Run("formatSegmentsForClassify includes context", func(t *testing.T) {
+		segments := []*kire.Segment{
+			{Meta: kire.SegmentMeta{SegmentID: "seg-0001"}, Content: "# Login", Context: "Task管理API仕様書"},
+			{Meta: kire.SegmentMeta{SegmentID: "seg-0002"}, Content: "# Register", Context: ""},
+		}
+
+		result := formatSegmentsForClassify(segments)
+		if !strings.Contains(result, "segment_id: seg-0001 | context: Task管理API仕様書 ---") {
+			t.Errorf("expected context in header for seg-0001, got: %s", result)
+		}
+		// seg-0002 has no context, should not include context field
+		if strings.Contains(result, "seg-0002 | context:") {
+			t.Errorf("seg-0002 should not have context field, got: %s", result)
+		}
+	})
+
+	t.Run("formatSegmentsForExamples includes context", func(t *testing.T) {
+		segments := []*kire.Segment{
+			{Meta: kire.SegmentMeta{SegmentID: "seg-0001"}, Content: "# Login", Context: "Task管理API仕様書"},
+			{Meta: kire.SegmentMeta{SegmentID: "seg-0002"}, Content: "# Register"},
+		}
+		titles := map[string]string{
+			"seg-0001": "ログイン",
+			"seg-0002": "登録",
+		}
+
+		result := formatSegmentsForExamples(segments, titles)
+		if !strings.Contains(result, "segment_id: seg-0001 | title: ログイン | context: Task管理API仕様書 ---") {
+			t.Errorf("expected context in header for seg-0001, got: %s", result)
+		}
+		if strings.Contains(result, "seg-0002 | title: 登録 | context:") {
+			t.Errorf("seg-0002 should not have context field, got: %s", result)
 		}
 	})
 }
